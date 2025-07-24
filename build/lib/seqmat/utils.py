@@ -16,7 +16,7 @@ try:
 except ImportError:
     GTFPARSE_AVAILABLE = False
 
-from .config import save_config, load_config
+from .config import save_config, load_config, get_default_organism, get_directory_config, get_available_organisms, DEFAULT_ORGANISM_DATA, get_organism_info
 
 
 def dump_pickle(path: Union[str, Path], data: Any) -> None:
@@ -161,7 +161,7 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
                                          gtex_file: Optional[Path] = None) -> None:
     """Parse Ensembl GTF annotations and create gene data files."""
     if not GTFPARSE_AVAILABLE:
-        raise ImportError("gtfparse is required for parsing annotations. Install with: pip install gtfparse")
+        raise ImportError("gtfparse is required for genomics data setup. Install with: pip install seqmat[genomics]")
     
     # Load GTEx expression data if available
     if gtex_file and gtex_file.exists():
@@ -175,12 +175,23 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
     print("Reading GTF annotations...")
     annotations = read_gtf(annotations_file)
     
-    print(f"Processing {len(annotations.gene_id.unique())} genes...")
+    # Debug: Check what columns are available
+    print(f"Available columns: {list(annotations.columns)}")
+    
+    # Check if required columns exist
+    required_columns = ['gene_id', 'gene_biotype', 'seqname', 'strand', 'feature']
+    missing_columns = [col for col in required_columns if col not in annotations.columns]
+    
+    if missing_columns:
+        raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
+                        f"Available columns: {list(annotations.columns)}")
+    
+    print(f"Processing {len(annotations['gene_id'].unique())} genes...")
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        biotype = gene_df.gene_biotype.unique().tolist()
-        chrm = gene_df.seqname.unique().tolist()
-        strand = gene_df.strand.unique().tolist()
-        gene_attribute = gene_df[gene_df.feature == 'gene']
+        biotype = gene_df['gene_biotype'].unique().tolist()
+        chrm = gene_df['seqname'].unique().tolist()
+        strand = gene_df['strand'].unique().tolist()
+        gene_attribute = gene_df[gene_df['feature'] == 'gene']
         
         if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:
             continue
@@ -209,14 +220,14 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             continue
 
         gene_data = {
-            'gene_name': gene_attribute.gene_name,
+            'gene_name': gene_attribute['gene_name'].iloc[0],
             'chrm': chrm,
-            'gene_id': gene_attribute.gene_id,
-            'gene_start': gene_attribute.start,
-            'gene_end': gene_attribute.end,
+            'gene_id': gene_attribute['gene_id'].iloc[0],
+            'gene_start': gene_attribute['start'].iloc[0],
+            'gene_end': gene_attribute['end'].iloc[0],
             'rev': rev,
-            'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') else [],
-            'biotype': gene_attribute.gene_biotype,
+            'tag': gene_attribute['tag'].iloc[0].split(',') if 'tag' in gene_attribute.columns and pd.notna(gene_attribute['tag'].iloc[0]) else [],
+            'biotype': gene_attribute['gene_biotype'].iloc[0],
             'transcripts': transcripts,
             'tissue_expression': gtex_df.loc[gene_id].to_dict() if gene_id in gtex_df.index else {},
         }
@@ -259,25 +270,36 @@ def split_fasta(input_file: Path, output_directory: Path) -> None:
 
 def download_genome_data(organism: str, base_path: Path) -> Dict[str, Path]:
     """Download all required data files for a specific organism."""
-    file_maps = {
-        'hg38': {
-            'cons_url': 'https://genome-data-public-access.s3.eu-north-1.amazonaws.com/conservation.pkl',
-            'expression_url': 'https://storage.googleapis.com/adult-gtex/bulk-gex/v8/rna-seq/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_median_tpm.gct.gz',
-            'fasta_url': 'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/latest/hg38.fa.gz',
-            'ensembl_url': 'https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz'
-        },
-        'mm39': {
-            'cons_url': 'https://genome-data-public-access.s3.eu-north-1.amazonaws.com/mm39_conservation.pkl',
-            'expression_url': '',
-            'fasta_url': 'https://hgdownload.soe.ucsc.edu/goldenPath/mm39/bigZips/mm39.fa.gz',
-            'ensembl_url': 'https://ftp.ensembl.org/pub/release-112/gtf/mus_musculus/Mus_musculus.GRCm39.112.gtf.gz'
-        }
+    # Always get URLs from DEFAULT_ORGANISM_DATA, not from config
+    from .config import DEFAULT_ORGANISM_DATA
+    
+    if organism not in DEFAULT_ORGANISM_DATA:
+        raise ValueError(f"Organism {organism} not supported for download. Available: {list(DEFAULT_ORGANISM_DATA.keys())}")
+    
+    organism_data = DEFAULT_ORGANISM_DATA[organism]
+    urls = organism_data.get('urls', {})
+    
+    if not urls:
+        raise ValueError(f"No URLs configured for organism {organism}")
+    
+    # Map config URLs to expected keys
+    url_mapping = {
+        'fasta': 'fasta_url',
+        'gtf': 'ensembl_url', 
+        'conservation': 'cons_url',
+        'gtex': 'expression_url'
     }
     
-    if organism not in file_maps:
-        raise ValueError(f"Organism {organism} not supported. Choose from: {list(file_maps.keys())}")
+    # Convert config format to expected format
+    mapped_urls = {}
+    for config_key, url in urls.items():
+        if config_key in url_mapping:
+            mapped_urls[url_mapping[config_key]] = url
     
-    urls = file_maps[organism]
+    if not mapped_urls:
+        raise ValueError(f"No valid URLs found for organism {organism}. Available keys: {list(urls.keys())}")
+    
+    urls = mapped_urls
     files = {}
     
     # Download conservation data
@@ -298,7 +320,7 @@ def download_genome_data(organism: str, base_path: Path) -> Dict[str, Path]:
     return files
 
 
-def setup_genomics_data(basepath: str, organism: str = 'hg38', force: bool = False) -> None:
+def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bool = False) -> None:
     """
     Set up genomics data for a specific organism.
     
@@ -307,12 +329,17 @@ def setup_genomics_data(basepath: str, organism: str = 'hg38', force: bool = Fal
         organism: Organism identifier ('hg38' or 'mm39')
         force: Force overwrite existing data
     """
+    if organism is None:
+        organism = get_default_organism()
     base_path = Path(basepath) / organism
+    
+    # Get configurable directory structure
+    dir_config = get_directory_config()
     
     # Define paths
     config_paths = {
-        'CHROM_SOURCE': str(base_path / 'chromosomes'),
-        'MRNA_PATH': str(base_path / 'annotations'),
+        'CHROM_SOURCE': str(base_path / dir_config['chromosomes']),
+        'MRNA_PATH': str(base_path / dir_config['annotations']),
         'MISSPLICING_PATH': str(base_path / 'missplicing'),
         'ONCOSPLICE_PATH': str(base_path / 'oncosplice'),
         'BASE': str(base_path),
@@ -341,7 +368,7 @@ def setup_genomics_data(basepath: str, organism: str = 'hg38', force: bool = Fal
     files = download_genome_data(organism, base_path)
     
     # Process FASTA file
-    fasta_build_path = base_path / 'chromosomes'
+    fasta_build_path = base_path / dir_config['chromosomes']
     fasta_build_path.mkdir(exist_ok=True)
     split_fasta(files['fasta_file'], fasta_build_path)
     
@@ -395,11 +422,7 @@ def list_supported_organisms() -> List[str]:
     Returns:
         List of supported organism names
     """
-    file_maps = {
-        'hg38': 'Homo sapiens (Human)',
-        'mm39': 'Mus musculus (Mouse)'
-    }
-    return list(file_maps.keys())
+    return get_available_organisms()
 
 
 def get_organism_info(organism: str) -> Dict[str, Any]:
@@ -606,13 +629,9 @@ def print_data_summary():
     # Supported organisms
     print("🌍 Supported Organisms:")
     supported = list_supported_organisms()
-    organism_names = {
-        'hg38': 'Homo sapiens (Human)',
-        'mm39': 'Mus musculus (Mouse)'
-    }
     for org in supported:
         status = "✅ Configured" if org in summary["configured_organisms"] else "❌ Not configured"
-        name = organism_names.get(org, org)
+        name = DEFAULT_ORGANISM_DATA.get(org, {}).get('name', org)
         print(f"   {org}: {name} - {status}")
     print()
     

@@ -186,12 +186,12 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
                         f"Available columns: {list(annotations.columns)}")
     
-    print(f"Processing {len(annotations.gene_id.unique())} genes...")
+    print(f"Processing {len(annotations['gene_id'].unique())} genes...")
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        biotype = gene_df.gene_biotype.unique().tolist()
-        chrm = gene_df.seqname.unique().tolist()
-        strand = gene_df.strand.unique().tolist()
-        gene_attribute = gene_df[gene_df.feature == 'gene']
+        biotype = gene_df['gene_biotype'].unique().tolist()
+        chrm = gene_df['seqname'].unique().tolist()
+        strand = gene_df['strand'].unique().tolist()
+        gene_attribute = gene_df[gene_df['feature'] == 'gene']
         
         if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:
             continue
@@ -220,14 +220,14 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             continue
 
         gene_data = {
-            'gene_name': gene_attribute.gene_name,
+            'gene_name': gene_attribute['gene_name'].iloc[0],
             'chrm': chrm,
-            'gene_id': gene_attribute.gene_id,
-            'gene_start': gene_attribute.start,
-            'gene_end': gene_attribute.end,
+            'gene_id': gene_attribute['gene_id'].iloc[0],
+            'gene_start': gene_attribute['start'].iloc[0],
+            'gene_end': gene_attribute['end'].iloc[0],
             'rev': rev,
-            'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') else [],
-            'biotype': gene_attribute.gene_biotype,
+            'tag': gene_attribute['tag'].iloc[0].split(',') if 'tag' in gene_attribute.columns and pd.notna(gene_attribute['tag'].iloc[0]) else [],
+            'biotype': gene_attribute['gene_biotype'].iloc[0],
             'transcripts': transcripts,
             'tissue_expression': gtex_df.loc[gene_id].to_dict() if gene_id in gtex_df.index else {},
         }

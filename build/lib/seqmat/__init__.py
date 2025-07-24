@@ -5,9 +5,9 @@ A comprehensive Python library for genomic sequence analysis with full mutation 
 splicing analysis, and sequence manipulation.
 """
 
-__version__ = "0.1.0"
-__author__ = "Your Name"
-__email__ = "your.email@example.com"
+__version__ = "0.1.3"
+__author__ = "Nicolas Lynn Vila"
+__email__ = "nicolasalynn@gmail.com"
 
 from .seqmat import SeqMat
 from .gene import Gene

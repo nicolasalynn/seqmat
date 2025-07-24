@@ -52,12 +52,49 @@ def save_config(config: Dict[str, Any]) -> None:
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
 
-def get_organism_config(organism: str = 'hg38') -> Dict[str, Path]:
+def get_default_organism() -> str:
+    """Get the default organism from config or fallback"""
+    config = load_config()
+    return config.get('default_organism', DEFAULT_SETTINGS['default_organism'])
+
+def get_available_organisms() -> List[str]:
+    """Get list of available organisms from config and defaults"""
+    config = load_config()
+    configured_organisms = set(config.keys()) - {'default_organism', 'directory_structure'}
+    default_organisms = set(DEFAULT_ORGANISM_DATA.keys())
+    return sorted(configured_organisms | default_organisms)
+
+def get_organism_info(organism: str) -> Dict[str, Any]:
+    """Get organism information including name and URLs"""
+    config = load_config()
+    
+    if organism in config and isinstance(config[organism], dict):
+        org_config = config[organism]
+        # Merge with defaults if available
+        if organism in DEFAULT_ORGANISM_DATA:
+            default_data = DEFAULT_ORGANISM_DATA[organism].copy()
+            default_data.update(org_config)
+            return default_data
+        return org_config
+    elif organism in DEFAULT_ORGANISM_DATA:
+        return DEFAULT_ORGANISM_DATA[organism]
+    else:
+        raise ValueError(f"Organism '{organism}' not configured. Available: {get_available_organisms()}")
+
+def get_organism_config(organism: Optional[str] = None) -> Dict[str, Path]:
     """Get configuration paths for a specific organism"""
+    if organism is None:
+        organism = get_default_organism()
+        
     config = load_config()
     if organism not in config:
         raise ValueError(f"Organism '{organism}' not configured. Run setup_genomics_data() first.")
     
     # Convert string paths to Path objects
     org_config = config[organism]
-    return {k: Path(v) for k, v in org_config.items()}
+    return {k: Path(v) for k, v in org_config.items() if isinstance(v, str)}
+
+def get_directory_config() -> Dict[str, str]:
+    """Get directory structure configuration"""
+    config = load_config()
+    return config.get('directory_structure', DEFAULT_SETTINGS['directory_structure'])
