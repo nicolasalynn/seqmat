@@ -107,15 +107,16 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
     if transcript_df.empty:
         return None
 
-    transcript = transcript_df[transcript_df.feature == 'transcript'].squeeze()
-    if transcript.empty:
+    transcript_rows = transcript_df[transcript_df.feature == 'transcript']
+    if transcript_rows.empty:
         return None
+    transcript = transcript_rows.iloc[0]
 
     exon_df = transcript_df[transcript_df.feature == 'exon']
     cds_df = transcript_df[transcript_df.feature == 'CDS']
 
     # Simplifying start and end assignments
-    transcript_start, transcript_end = (transcript.end, transcript.start) if rev else (transcript.start, transcript.end)
+    transcript_start, transcript_end = (transcript['end'], transcript['start']) if rev else (transcript['start'], transcript['end'])
 
     # Handling exons
     exon_starts, exon_ends = (exon_df.end, exon_df.start) if rev else (exon_df.start, exon_df.end)
@@ -132,12 +133,12 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
         return None
 
     data = {
-        'transcript_id': transcript.transcript_id,
-        'transcript_biotype': transcript.transcript_biotype,
+        'transcript_id': transcript['transcript_id'],
+        'transcript_biotype': transcript['transcript_biotype'],
         'transcript_start': int(transcript_start),
         'transcript_end': int(transcript_end),
-        'tag': transcript.tag,
-        'primary_transcript': 'Ensembl' in transcript.tag if hasattr(transcript, 'tag') else False,
+        'tag': transcript['tag'] if 'tag' in transcript and pd.notna(transcript['tag']) else '',
+        'primary_transcript': 'Ensembl' in str(transcript.get('tag', '')) if 'tag' in transcript else False,
         'rev': rev,
         'chrm': chrm
     }
@@ -155,7 +156,7 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
             data.update({
                 'TIS': cds_start[0], 
                 'TTS': cds_end[0], 
-                'protein_id': transcript.protein_id if hasattr(transcript, 'protein_id') else None
+                'protein_id': transcript.get('protein_id', None)
             })
 
     # Add conservation data if available
@@ -214,14 +215,17 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         biotype_path = local_path / biotype[0]
         biotype_path.mkdir(exist_ok=True)
 
-        gene_attribute = gene_attribute.squeeze()
-        file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute.gene_name.upper()}.pkl'
+        if gene_attribute.empty:
+            continue
+            
+        gene_attribute = gene_attribute.iloc[0]
+        file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute["gene_name"].upper()}.pkl'
         
         if file_name.exists():
             continue
 
-        rev = gene_attribute.strand == '-'
-        chrm = gene_attribute.seqname.replace('chr', '')
+        rev = gene_attribute['strand'] == '-'
+        chrm = gene_attribute['seqname'].replace('chr', '')
         
         # Process all transcripts for this gene
         transcripts = {}
@@ -235,14 +239,14 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             continue
 
         gene_data = {
-            'gene_name': gene_attribute['gene_name'].iloc[0],
+            'gene_name': gene_attribute['gene_name'],
             'chrm': chrm,
-            'gene_id': gene_attribute['gene_id'].iloc[0],
-            'gene_start': gene_attribute['start'].iloc[0],
-            'gene_end': gene_attribute['end'].iloc[0],
+            'gene_id': gene_attribute['gene_id'],
+            'gene_start': int(gene_attribute['start']),
+            'gene_end': int(gene_attribute['end']),
             'rev': rev,
-            'tag': gene_attribute['tag'].iloc[0].split(',') if 'tag' in gene_attribute.columns and pd.notna(gene_attribute['tag'].iloc[0]) else [],
-            'biotype': gene_attribute['gene_biotype'].iloc[0],
+            'tag': gene_attribute['tag'].split(',') if 'tag' in gene_attribute and pd.notna(gene_attribute['tag']) else [],
+            'biotype': gene_attribute['gene_biotype'],
             'transcripts': transcripts,
             'tissue_expression': gtex_df.loc[gene_id].to_dict() if gene_id in gtex_df.index else {},
         }
