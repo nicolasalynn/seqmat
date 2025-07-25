@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: seqmat
-Version: 0.1.4
+Version: 0.1.5
 Summary: Lightning-fast gene manipulation and analysis library.
 Home-page: https://github.com/nicolasalynn/seqmat
 Author: Nicolas Lynn Vila
@@ -22,19 +22,14 @@ Requires-Dist: pandas<2.1.0,>=1.3.0
 Requires-Dist: pysam>=0.19.0
 Requires-Dist: requests>=2.26.0
 Requires-Dist: tqdm>=4.62.0
-Provides-Extra: bio
-Requires-Dist: biopython>=1.79; extra == "bio"
-Provides-Extra: genomics
-Requires-Dist: gtfparse>=1.2.0; extra == "genomics"
+Requires-Dist: biopython>=1.79
+Requires-Dist: gtfparse>=1.2.0
 Provides-Extra: dev
 Requires-Dist: pytest>=6.0; extra == "dev"
 Requires-Dist: pytest-cov>=2.0; extra == "dev"
 Requires-Dist: black>=21.0; extra == "dev"
 Requires-Dist: flake8>=3.9; extra == "dev"
 Requires-Dist: mypy>=0.910; extra == "dev"
-Provides-Extra: all
-Requires-Dist: biopython>=1.79; extra == "all"
-Requires-Dist: gtfparse>=1.2.0; extra == "all"
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier
