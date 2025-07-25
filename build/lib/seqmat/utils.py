@@ -16,6 +16,12 @@ try:
 except ImportError:
     GTFPARSE_AVAILABLE = False
 
+try:
+    import polars as pl
+    POLARS_AVAILABLE = True
+except ImportError:
+    POLARS_AVAILABLE = False
+
 from .config import save_config, load_config, get_default_organism, get_directory_config, get_available_organisms, DEFAULT_ORGANISM_DATA, get_organism_info
 
 
@@ -191,7 +197,12 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
     print("Reading GTF annotations...")
     annotations = read_gtf(annotations_file)
     
-    # Debug: Check what columns are available
+    # Convert Polars to Pandas immediately if needed
+    if POLARS_AVAILABLE and hasattr(annotations, '__module__') and 'polars' in annotations.__module__:
+        print("Converting Polars DataFrame to Pandas...")
+        annotations = annotations.to_pandas()
+    
+    print(f"Annotations shape: {annotations.shape}")
     print(f"Available columns: {list(annotations.columns)}")
     
     # Check if required columns exist
@@ -202,8 +213,12 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
                         f"Available columns: {list(annotations.columns)}")
     
-    print(f"Processing {len(annotations.gene_id.unique())} genes...")
+    unique_genes = len(annotations['gene_id'].unique())
+    print(f"Processing {unique_genes} genes...")
+    
+    # Process genes using original pandas attribute-style access
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
+        # Use pandas attribute-style access (original working code)
         biotype = gene_df.gene_biotype.unique().tolist()
         chrm = gene_df.seqname.unique().tolist()
         strand = gene_df.strand.unique().tolist()
@@ -219,6 +234,7 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             continue
             
         gene_attribute = gene_attribute.squeeze()
+        
         file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute.gene_name.upper()}.pkl'
         
         if file_name.exists():
@@ -238,6 +254,7 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         if not transcripts:
             continue
 
+        # Build gene_data using attribute-style access (original working code)
         gene_data = {
             'gene_name': gene_attribute.gene_name,
             'chrm': chrm,
@@ -248,8 +265,16 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') and pd.notna(gene_attribute.tag) else [],
             'biotype': gene_attribute.gene_biotype,
             'transcripts': transcripts,
-            'tissue_expression': gtex_df.loc[gene_id].squeeze().to_dict() if gene_id in gtex_df.index else {},
+            'tissue_expression': {},
         }
+        
+        # Handle tissue expression
+        try:
+            if not gtex_df.empty and gene_id in gtex_df.index:
+                tissue_expr = gtex_df.loc[gene_id]
+                gene_data['tissue_expression'] = tissue_expr.squeeze().to_dict()
+        except Exception:
+            gene_data['tissue_expression'] = {}
 
         dump_pickle(file_name, gene_data)
 
