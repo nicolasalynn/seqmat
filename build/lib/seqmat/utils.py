@@ -43,11 +43,17 @@ def unload_json(path: Union[str, Path]) -> Any:
         return json.load(f)
 
 
-def download(external_url: str, local_path: Path) -> Path:
+def download(external_url: str, local_path: Path, skip_existing: bool = False) -> Path:
     """Download a file from URL to local path."""
-    print(f"Downloading {external_url}")
     local_file = Path(external_url).name
     local_file_path = Path(local_path) / local_file
+    
+    # Check if file already exists
+    if skip_existing and local_file_path.exists():
+        print(f"✓ File already exists: {local_file_path.name}")
+        return local_file_path
+    
+    print(f"Downloading {external_url}")
     
     try:
         response = requests.get(external_url, stream=True)
@@ -69,20 +75,29 @@ def download(external_url: str, local_path: Path) -> Path:
     return local_file_path
 
 
-def download_and_ungzip(external_url: str, local_path: Path) -> Path:
+def download_and_ungzip(external_url: str, local_path: Path, skip_existing: bool = False) -> Path:
     """Download and decompress a gzipped file."""
-    gzipped_file = download(external_url, local_path)
+    # Check if uncompressed file already exists
+    local_file = Path(external_url).name
+    output_file = Path(local_path) / local_file.rstrip('.gz')
     
-    # Decompress the file
-    output_file = Path(str(gzipped_file).rstrip('.gz'))
-    print(f"Decompressing {gzipped_file.name}")
+    if skip_existing and output_file.exists():
+        print(f"✓ Uncompressed file already exists: {output_file.name}")
+        return output_file
     
-    with gzip.open(gzipped_file, 'rb') as f_in:
-        with open(output_file, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+    gzipped_file = download(external_url, local_path, skip_existing=skip_existing)
     
-    # Remove the gzipped file
-    gzipped_file.unlink()
+    # Check if we need to decompress
+    if gzipped_file.suffix == '.gz' and not output_file.exists():
+        print(f"Decompressing {gzipped_file.name}")
+        
+        with gzip.open(gzipped_file, 'rb') as f_in:
+            with open(output_file, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        # Remove the gzipped file
+        gzipped_file.unlink()
+    
     return output_file
 
 
@@ -235,11 +250,18 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         dump_pickle(file_name, gene_data)
 
 
-def split_fasta(input_file: Path, output_directory: Path) -> None:
+def split_fasta(input_file: Path, output_directory: Path, skip_existing: bool = False) -> None:
     """Split a FASTA file into individual chromosome files."""
     print("Splitting FASTA file by chromosome...")
     
     output_directory.mkdir(exist_ok=True)
+    
+    # Check if chromosomes already exist
+    if skip_existing:
+        existing_fastas = list(output_directory.glob("*.fasta"))
+        if existing_fastas:
+            print(f"✓ Found {len(existing_fastas)} existing chromosome files, skipping FASTA split")
+            return
     
     with open(input_file, 'r') as file:
         sequence = ''
@@ -250,9 +272,12 @@ def split_fasta(input_file: Path, output_directory: Path) -> None:
                 if sequence and header and '_' not in header:
                     # Write previous sequence
                     output_file = output_directory / f"{header}.fasta"
-                    with open(output_file, 'w') as out:
-                        out.write(f'>{header}\n{sequence}\n')
-                    print(f"Created {output_file.name}")
+                    if skip_existing and output_file.exists():
+                        print(f"✓ {output_file.name} already exists, skipping")
+                    else:
+                        with open(output_file, 'w') as out:
+                            out.write(f'>{header}\n{sequence}\n')
+                        print(f"Created {output_file.name}")
                     
                 # Start new sequence
                 header = line[1:].split()[0]
@@ -268,7 +293,7 @@ def split_fasta(input_file: Path, output_directory: Path) -> None:
             print(f"Created {output_file.name}")
 
 
-def download_genome_data(organism: str, base_path: Path) -> Dict[str, Path]:
+def download_genome_data(organism: str, base_path: Path, skip_existing: bool = False) -> Dict[str, Path]:
     """Download all required data files for a specific organism."""
     # Always get URLs from DEFAULT_ORGANISM_DATA, not from config
     from .config import DEFAULT_ORGANISM_DATA
@@ -303,24 +328,24 @@ def download_genome_data(organism: str, base_path: Path) -> Dict[str, Path]:
     files = {}
     
     # Download conservation data
-    files['cons_file'] = download(urls['cons_url'], base_path)
+    files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
     
     # Download expression data if available
     if urls['expression_url']:
-        files['gtex_file'] = download_and_ungzip(urls['expression_url'], base_path)
+        files['gtex_file'] = download_and_ungzip(urls['expression_url'], base_path, skip_existing=skip_existing)
     else:
         files['gtex_file'] = None
     
     # Download genome FASTA
-    files['fasta_file'] = download_and_ungzip(urls['fasta_url'], base_path)
+    files['fasta_file'] = download_and_ungzip(urls['fasta_url'], base_path, skip_existing=skip_existing)
     
     # Download Ensembl annotations
-    files['ensembl_file'] = download_and_ungzip(urls['ensembl_url'], base_path)
+    files['ensembl_file'] = download_and_ungzip(urls['ensembl_url'], base_path, skip_existing=skip_existing)
     
     return files
 
 
-def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bool = False) -> None:
+def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bool = False, pickup: bool = False) -> None:
     """
     Set up genomics data for a specific organism.
     
@@ -328,6 +353,7 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
         basepath: Base directory for storing genomic data
         organism: Organism identifier ('hg38' or 'mm39')
         force: Force overwrite existing data
+        pickup: Resume interrupted setup, reuse existing downloaded files
     """
     if organism is None:
         organism = get_default_organism()
@@ -350,13 +376,13 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     config = load_config()
     
     # Check if organism already configured
-    if organism in config and not force:
-        print(f"Organism {organism} already configured. Use force=True to overwrite.")
+    if organism in config and not force and not pickup:
+        print(f"Organism {organism} already configured. Use force=True to overwrite or pickup=True to resume.")
         return
     
     # Check if directory exists
-    if base_path.exists() and any(base_path.iterdir()) and not force:
-        print(f"Directory {base_path} not empty. Use force=True to overwrite.")
+    if base_path.exists() and any(base_path.iterdir()) and not force and not pickup:
+        print(f"Directory {base_path} not empty. Use force=True to overwrite or pickup=True to resume.")
         return
     
     # Create directory structure
@@ -365,12 +391,12 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     
     # Download all required files
     print(f"Downloading data files for {organism}...")
-    files = download_genome_data(organism, base_path)
+    files = download_genome_data(organism, base_path, skip_existing=pickup)
     
     # Process FASTA file
     fasta_build_path = base_path / dir_config['chromosomes']
     fasta_build_path.mkdir(exist_ok=True)
-    split_fasta(files['fasta_file'], fasta_build_path)
+    split_fasta(files['fasta_file'], fasta_build_path, skip_existing=pickup)
     
     # Process annotations
     ensembl_annotation_path = base_path / 'annotations'
@@ -391,10 +417,11 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     for path_key in ['MISSPLICING_PATH', 'ONCOSPLICE_PATH', 'TEMP']:
         Path(config_paths[path_key]).mkdir(parents=True, exist_ok=True)
     
-    # Clean up downloaded files
-    for file_path in files.values():
-        if file_path and file_path.exists():
-            file_path.unlink()
+    # Clean up downloaded files (only if not in pickup mode)
+    if not pickup:
+        for file_path in files.values():
+            if file_path and file_path.exists():
+                file_path.unlink()
     
     # Save configuration
     config[organism] = config_paths
