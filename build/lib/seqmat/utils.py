@@ -119,8 +119,11 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
     transcript_start, transcript_end = (transcript['end'], transcript['start']) if rev else (transcript['start'], transcript['end'])
 
     # Handling exons
-    exon_starts, exon_ends = (exon_df.end, exon_df.start) if rev else (exon_df.start, exon_df.end)
-    exon_starts, exon_ends = exon_starts.tolist(), exon_ends.tolist()
+    if not exon_df.empty:
+        exon_starts = exon_df['end'].tolist() if rev else exon_df['start'].tolist()
+        exon_ends = exon_df['start'].tolist() if rev else exon_df['end'].tolist()
+    else:
+        exon_starts, exon_ends = [], []
 
     if transcript_start not in exon_starts or transcript_end not in exon_ends:
         return None
@@ -148,9 +151,15 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
 
     # Handling CDS
     if not cds_df.empty:
-        cds_start, cds_end = (cds_df.end, cds_df.start) if rev else (cds_df.start, cds_df.end)
-        cds_start = [c for c in cds_start.tolist() if c not in acceptors]
-        cds_end = [c for c in cds_end.tolist() if c not in donors]
+        if rev:
+            cds_start_list = cds_df['end'].tolist()
+            cds_end_list = cds_df['start'].tolist()
+        else:
+            cds_start_list = cds_df['start'].tolist()
+            cds_end_list = cds_df['end'].tolist()
+        
+        cds_start = [c for c in cds_start_list if c not in acceptors]
+        cds_end = [c for c in cds_end_list if c not in donors]
         
         if len(cds_start) == 1 and len(cds_end) == 1:
             data.update({
@@ -160,11 +169,11 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
             })
 
     # Add conservation data if available
-    if transcript.transcript_id in cons_data:
+    if transcript['transcript_id'] in cons_data:
         data.update({
             'cons_available': True,
-            'cons_vector': cons_data[transcript.transcript_id]['scores'],
-            'cons_seq': cons_data[transcript.transcript_id]['seq']
+            'cons_vector': cons_data[transcript['transcript_id']]['scores'],
+            'cons_seq': cons_data[transcript['transcript_id']]['seq']
         })
     else:
         data.update({'cons_available': False})
@@ -204,9 +213,9 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
     
     print(f"Processing {len(annotations['gene_id'].unique())} genes...")
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        biotype = gene_df['gene_biotype'].unique().tolist()
-        chrm = gene_df['seqname'].unique().tolist()
-        strand = gene_df['strand'].unique().tolist()
+        biotype = list(gene_df['gene_biotype'].unique())
+        chrm = list(gene_df['seqname'].unique())
+        strand = list(gene_df['strand'].unique())
         gene_attribute = gene_df[gene_df['feature'] == 'gene']
         
         if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:

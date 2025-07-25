@@ -116,14 +116,11 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
     cds_df = transcript_df[transcript_df.feature == 'CDS']
 
     # Simplifying start and end assignments
-    transcript_start, transcript_end = (transcript['end'], transcript['start']) if rev else (transcript['start'], transcript['end'])
+    transcript_start, transcript_end = (transcript.end, transcript.start) if rev else (transcript.start, transcript.end)
 
     # Handling exons
-    if not exon_df.empty:
-        exon_starts = exon_df['end'].tolist() if rev else exon_df['start'].tolist()
-        exon_ends = exon_df['start'].tolist() if rev else exon_df['end'].tolist()
-    else:
-        exon_starts, exon_ends = [], []
+    exon_starts, exon_ends = (exon_df.end, exon_df.start) if rev else (exon_df.start, exon_df.end)
+    exon_starts, exon_ends = exon_starts.tolist(), exon_ends.tolist()
 
     if transcript_start not in exon_starts or transcript_end not in exon_ends:
         return None
@@ -136,12 +133,12 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
         return None
 
     data = {
-        'transcript_id': transcript['transcript_id'],
-        'transcript_biotype': transcript['transcript_biotype'],
+        'transcript_id': transcript.transcript_id,
+        'transcript_biotype': transcript.transcript_biotype,
         'transcript_start': int(transcript_start),
         'transcript_end': int(transcript_end),
-        'tag': transcript['tag'] if 'tag' in transcript and pd.notna(transcript['tag']) else '',
-        'primary_transcript': 'Ensembl' in str(transcript.get('tag', '')) if 'tag' in transcript else False,
+        'tag': transcript.tag if hasattr(transcript, 'tag') else '',
+        'primary_transcript': 'Ensembl' in transcript.tag if hasattr(transcript, 'tag') and pd.notna(transcript.tag) else False,
         'rev': rev,
         'chrm': chrm
     }
@@ -151,29 +148,23 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
 
     # Handling CDS
     if not cds_df.empty:
-        if rev:
-            cds_start_list = cds_df['end'].tolist()
-            cds_end_list = cds_df['start'].tolist()
-        else:
-            cds_start_list = cds_df['start'].tolist()
-            cds_end_list = cds_df['end'].tolist()
-        
-        cds_start = [c for c in cds_start_list if c not in acceptors]
-        cds_end = [c for c in cds_end_list if c not in donors]
+        cds_start, cds_end = (cds_df.end, cds_df.start) if rev else (cds_df.start, cds_df.end)
+        cds_start = [c for c in cds_start.tolist() if c not in acceptors]
+        cds_end = [c for c in cds_end.tolist() if c not in donors]
         
         if len(cds_start) == 1 and len(cds_end) == 1:
             data.update({
                 'TIS': cds_start[0], 
                 'TTS': cds_end[0], 
-                'protein_id': transcript.get('protein_id', None)
+                'protein_id': transcript.protein_id if hasattr(transcript, 'protein_id') else None
             })
 
     # Add conservation data if available
-    if transcript['transcript_id'] in cons_data:
+    if transcript.transcript_id in cons_data:
         data.update({
             'cons_available': True,
-            'cons_vector': cons_data[transcript['transcript_id']]['scores'],
-            'cons_seq': cons_data[transcript['transcript_id']]['seq']
+            'cons_vector': cons_data[transcript.transcript_id]['scores'],
+            'cons_seq': cons_data[transcript.transcript_id]['seq']
         })
     else:
         data.update({'cons_available': False})
@@ -192,7 +183,7 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
     if gtex_file and gtex_file.exists():
         print("Loading GTEx expression data...")
         gtex_df = pd.read_csv(gtex_file, delimiter='\t', header=2)
-        gtex_df['Name'] = gtex_df['Name'].apply(lambda x: x.split('.')[0])
+        gtex_df.Name = gtex_df.apply(lambda row: row.Name.split('.')[0], axis=1)
         gtex_df = gtex_df.set_index('Name').drop(columns=['Description'])
     else:
         gtex_df = pd.DataFrame()
@@ -211,12 +202,12 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
                         f"Available columns: {list(annotations.columns)}")
     
-    print(f"Processing {len(annotations['gene_id'].unique())} genes...")
+    print(f"Processing {len(annotations.gene_id.unique())} genes...")
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        biotype = list(gene_df['gene_biotype'].unique())
-        chrm = list(gene_df['seqname'].unique())
-        strand = list(gene_df['strand'].unique())
-        gene_attribute = gene_df[gene_df['feature'] == 'gene']
+        biotype = gene_df.gene_biotype.unique().tolist()
+        chrm = gene_df.seqname.unique().tolist()
+        strand = gene_df.strand.unique().tolist()
+        gene_attribute = gene_df[gene_df.feature == 'gene']
         
         if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:
             continue
@@ -227,14 +218,14 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         if gene_attribute.empty:
             continue
             
-        gene_attribute = gene_attribute.iloc[0]
-        file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute["gene_name"].upper()}.pkl'
+        gene_attribute = gene_attribute.squeeze()
+        file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute.gene_name.upper()}.pkl'
         
         if file_name.exists():
             continue
 
-        rev = gene_attribute['strand'] == '-'
-        chrm = gene_attribute['seqname'].replace('chr', '')
+        rev = gene_attribute.strand == '-'
+        chrm = gene_attribute.seqname.replace('chr', '')
         
         # Process all transcripts for this gene
         transcripts = {}
@@ -248,16 +239,16 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
             continue
 
         gene_data = {
-            'gene_name': gene_attribute['gene_name'],
+            'gene_name': gene_attribute.gene_name,
             'chrm': chrm,
-            'gene_id': gene_attribute['gene_id'],
-            'gene_start': int(gene_attribute['start']),
-            'gene_end': int(gene_attribute['end']),
+            'gene_id': gene_attribute.gene_id,
+            'gene_start': int(gene_attribute.start),
+            'gene_end': int(gene_attribute.end),
             'rev': rev,
-            'tag': gene_attribute['tag'].split(',') if 'tag' in gene_attribute and pd.notna(gene_attribute['tag']) else [],
-            'biotype': gene_attribute['gene_biotype'],
+            'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') and pd.notna(gene_attribute.tag) else [],
+            'biotype': gene_attribute.gene_biotype,
             'transcripts': transcripts,
-            'tissue_expression': gtex_df.loc[gene_id].to_dict() if gene_id in gtex_df.index else {},
+            'tissue_expression': gtex_df.loc[gene_id].squeeze().to_dict() if gene_id in gtex_df.index else {},
         }
 
         dump_pickle(file_name, gene_data)
