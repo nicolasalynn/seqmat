@@ -92,6 +92,16 @@ def get_organism_config(organism: Optional[str] = None) -> Dict[str, Path]:
     
     # Convert string paths to Path objects
     org_config = config[organism]
+    
+    # Handle case where org_config might be a string instead of dict
+    if isinstance(org_config, str):
+        raise ValueError(f"Invalid configuration for organism '{organism}'. "
+                        f"Expected dictionary but got string: {org_config}")
+    
+    if not isinstance(org_config, dict):
+        raise ValueError(f"Invalid configuration for organism '{organism}'. "
+                        f"Expected dictionary but got {type(org_config)}")
+    
     return {k: Path(v) for k, v in org_config.items() if isinstance(v, str)}
 
 def get_directory_config() -> Dict[str, str]:

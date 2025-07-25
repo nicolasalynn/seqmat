@@ -649,7 +649,10 @@ def data_summary() -> Dict[str, Any]:
     
     # Get detailed info for each configured organism
     for organism in summary["configured_organisms"]:
-        summary["organisms"][organism] = get_organism_info(organism)
+        try:
+            summary["organisms"][organism] = get_organism_info(organism)
+        except Exception as e:
+            summary["organisms"][organism] = {"error": f"Configuration error: {str(e)}"}
     
     # Add total counts
     total_genes = 0
