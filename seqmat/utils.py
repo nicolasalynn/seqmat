@@ -179,20 +179,64 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
     if not GTFPARSE_AVAILABLE:
         raise ImportError("gtfparse is required for genomics data setup. Install with: pip install seqmat[genomics]")
     
+    # Debug conservation data
+    print(f"\n=== CONSERVATION DATA DEBUG ===")
+    print(f"Conservation data type: {type(cons_data)}")
+    print(f"Number of entries in conservation data: {len(cons_data) if cons_data else 0}")
+    if cons_data:
+        sample_keys = list(cons_data.keys())[:5]
+        print(f"Sample conservation keys: {sample_keys}")
+        if sample_keys:
+            first_key = sample_keys[0]
+            print(f"Sample conservation entry structure for {first_key}: {cons_data[first_key].keys() if isinstance(cons_data[first_key], dict) else type(cons_data[first_key])}")
+    
     # Load GTEx expression data if available
     if gtex_file and gtex_file.exists():
+        print("\n=== GTEX DATA DEBUG ===")
         print("Loading GTEx expression data...")
         gtex_df = pd.read_csv(gtex_file, delimiter='\t', header=2)
-        gtex_df.Name = gtex_df.apply(lambda row: row.Name.split('.')[0], axis=1)
+        print(f"GTEx shape: {gtex_df.shape}")
+        print(f"GTEx columns: {list(gtex_df.columns)[:10]}...")
+        print(f"GTEx DataFrame type: {type(gtex_df)}")
+        print(f"First few Name values before processing: {gtex_df['Name'].head().tolist() if 'Name' in gtex_df.columns else 'No Name column'}")
+        
+        # Try the original attribute-style access
+        try:
+            gtex_df.Name = gtex_df.apply(lambda row: row.Name.split('.')[0], axis=1)
+            print("Successfully used attribute-style access on gtex_df")
+        except AttributeError:
+            print("AttributeError with attribute-style access, trying bracket notation")
+            gtex_df['Name'] = gtex_df['Name'].apply(lambda x: x.split('.')[0])
+        
+        print(f"First few Name values after processing: {gtex_df['Name'].head().tolist()}")
         gtex_df = gtex_df.set_index('Name').drop(columns=['Description'])
+        print(f"GTEx index sample: {list(gtex_df.index)[:5]}")
     else:
         gtex_df = pd.DataFrame()
+        print("\nNo GTEx data file")
 
+    print("\n=== ANNOTATIONS DEBUG ===")
     print("Reading GTF annotations...")
     annotations = read_gtf(annotations_file)
     
-    # Debug: Check what columns are available
+    # Debug annotations DataFrame
+    print(f"Annotations type: {type(annotations)}")
+    print(f"Annotations shape: {annotations.shape}")
     print(f"Available columns: {list(annotations.columns)}")
+    
+    # Test attribute vs bracket access
+    print("\nTesting DataFrame access methods:")
+    try:
+        test_attr = annotations.gene_id
+        print(f"Attribute access works: annotations.gene_id returns {type(test_attr)}")
+    except AttributeError as e:
+        print(f"Attribute access failed: {e}")
+    
+    try:
+        test_bracket = annotations['gene_id']
+        print(f"Bracket access works: annotations['gene_id'] returns {type(test_bracket)}")
+    except KeyError as e:
+        print(f"Bracket access failed: {e}")
     
     # Check if required columns exist
     required_columns = ['gene_id', 'gene_biotype', 'seqname', 'strand', 'feature']
@@ -202,12 +246,48 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
                         f"Available columns: {list(annotations.columns)}")
     
-    print(f"Processing {len(annotations.gene_id.unique())} genes...")
+    print(f"\nProcessing {len(annotations['gene_id'].unique())} genes...")
+    # Process first few genes with detailed debugging
+    gene_count = 0
     for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        biotype = gene_df.gene_biotype.unique().tolist()
-        chrm = gene_df.seqname.unique().tolist()
-        strand = gene_df.strand.unique().tolist()
-        gene_attribute = gene_df[gene_df.feature == 'gene']
+        gene_count += 1
+        
+        # Debug first gene in detail
+        if gene_count == 1:
+            print(f"\n=== FIRST GENE DEBUG (ID: {gene_id}) ===")
+            print(f"gene_df type: {type(gene_df)}")
+            print(f"gene_df shape: {gene_df.shape}")
+            print(f"gene_df columns: {list(gene_df.columns)}")
+            
+            # Test access methods on grouped DataFrame
+            print("\nTesting grouped DataFrame access:")
+            try:
+                test_attr = gene_df.gene_biotype
+                print(f"Attribute access works on grouped df: gene_df.gene_biotype returns {type(test_attr)}")
+            except AttributeError as e:
+                print(f"Attribute access failed on grouped df: {e}")
+            
+            try:
+                test_bracket = gene_df['gene_biotype']
+                print(f"Bracket access works on grouped df: gene_df['gene_biotype'] returns {type(test_bracket)}")
+            except KeyError as e:
+                print(f"Bracket access failed on grouped df: {e}")
+        
+        # Try both access methods
+        try:
+            biotype = gene_df.gene_biotype.unique().tolist()
+            chrm = gene_df.seqname.unique().tolist()
+            strand = gene_df.strand.unique().tolist()
+            gene_attribute = gene_df[gene_df.feature == 'gene']
+            access_method = "attribute"
+        except AttributeError:
+            biotype = gene_df['gene_biotype'].unique().tolist()
+            chrm = gene_df['seqname'].unique().tolist()
+            strand = gene_df['strand'].unique().tolist()
+            gene_attribute = gene_df[gene_df['feature'] == 'gene']
+            access_method = "bracket"
+            if gene_count == 1:
+                print(f"Using bracket notation for grouped DataFrame access")
         
         if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:
             continue
@@ -238,20 +318,68 @@ def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: P
         if not transcripts:
             continue
 
-        gene_data = {
-            'gene_name': gene_attribute.gene_name,
-            'chrm': chrm,
-            'gene_id': gene_attribute.gene_id,
-            'gene_start': int(gene_attribute.start),
-            'gene_end': int(gene_attribute.end),
-            'rev': rev,
-            'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') and pd.notna(gene_attribute.tag) else [],
-            'biotype': gene_attribute.gene_biotype,
-            'transcripts': transcripts,
-            'tissue_expression': gtex_df.loc[gene_id].squeeze().to_dict() if gene_id in gtex_df.index else {},
-        }
+        # Debug gene_attribute access
+        if gene_count == 1:
+            print(f"\ngene_attribute type after squeeze: {type(gene_attribute)}")
+            print(f"gene_attribute shape: {gene_attribute.shape if hasattr(gene_attribute, 'shape') else 'N/A'}")
+            if hasattr(gene_attribute, 'index'):
+                print(f"gene_attribute index: {gene_attribute.index}")
+        
+        # Build gene_data with error handling
+        try:
+            gene_data = {
+                'gene_name': gene_attribute.gene_name,
+                'chrm': chrm,
+                'gene_id': gene_attribute.gene_id,
+                'gene_start': int(gene_attribute.start),
+                'gene_end': int(gene_attribute.end),
+                'rev': rev,
+                'tag': gene_attribute.tag.split(',') if hasattr(gene_attribute, 'tag') and pd.notna(gene_attribute.tag) else [],
+                'biotype': gene_attribute.gene_biotype,
+                'transcripts': transcripts,
+                'tissue_expression': {},  # Will fill this separately
+            }
+        except AttributeError as e:
+            if gene_count == 1:
+                print(f"AttributeError building gene_data: {e}")
+            # Try bracket notation
+            gene_data = {
+                'gene_name': gene_attribute['gene_name'],
+                'chrm': chrm,
+                'gene_id': gene_attribute['gene_id'],
+                'gene_start': int(gene_attribute['start']),
+                'gene_end': int(gene_attribute['end']),
+                'rev': rev,
+                'tag': gene_attribute['tag'].split(',') if 'tag' in gene_attribute and pd.notna(gene_attribute['tag']) else [],
+                'biotype': gene_attribute['gene_biotype'],
+                'transcripts': transcripts,
+                'tissue_expression': {},
+            }
+        
+        # Handle tissue expression separately with debugging
+        if gene_count == 1:
+            print(f"\nChecking tissue expression for {gene_id}")
+            print(f"gene_id in gtex_df.index: {gene_id in gtex_df.index if not gtex_df.empty else 'gtex_df is empty'}")
+        
+        try:
+            if not gtex_df.empty and gene_id in gtex_df.index:
+                tissue_expr = gtex_df.loc[gene_id]
+                if gene_count == 1:
+                    print(f"tissue_expr type: {type(tissue_expr)}")
+                    print(f"tissue_expr shape: {tissue_expr.shape if hasattr(tissue_expr, 'shape') else 'N/A'}")
+                gene_data['tissue_expression'] = tissue_expr.squeeze().to_dict()
+        except Exception as e:
+            if gene_count == 1:
+                print(f"Error getting tissue expression: {e}")
+            gene_data['tissue_expression'] = {}
 
         dump_pickle(file_name, gene_data)
+        
+        # Stop after processing first gene for debugging
+        if gene_count == 1:
+            print(f"\nSuccessfully processed first gene. Continuing with remaining genes...")
+            print(f"Access method used: {access_method if 'access_method' in locals() else 'mixed'}")
+            print("=" * 50)
 
 
 def split_fasta(input_file: Path, output_directory: Path, skip_existing: bool = False) -> None:
