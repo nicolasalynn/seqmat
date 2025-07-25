@@ -25,7 +25,8 @@ def cmd_setup(args):
         setup_genomics_data(
             basepath=args.path,
             organism=args.organism,
-            force=args.force
+            force=args.force,
+            pickup=args.pickup
         )
         print(f"✅ Successfully set up {args.organism} data in {args.path}")
     except Exception as e:
@@ -224,6 +225,7 @@ def main():
     setup_parser.add_argument("--organism", default=default_organism, choices=available_organisms, 
                              help=f"Organism to set up (default: {default_organism})")
     setup_parser.add_argument("--force", action="store_true", help="Force overwrite existing data")
+    setup_parser.add_argument("--pickup", action="store_true", help="Resume interrupted setup, reuse existing downloaded files")
     setup_parser.set_defaults(func=cmd_setup)
     
     # List organisms command
