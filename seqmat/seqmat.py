@@ -155,9 +155,26 @@ class SeqMat:
             SeqMat object containing the requested sequence
         """
         config = get_organism_config(genome)
-        fasta_path = config.get('fasta')
+        
+        # Try different possible paths for FASTA files
+        chrom_source = config.get('CHROM_SOURCE')
+        fasta_path = config.get('fasta', chrom_source)
+        
         if fasta_path is None:
             raise ValueError(f"No FASTA path configured for genome '{genome}'")
+        
+        # Check if it's a directory with individual chromosome files
+        fasta_path = Path(fasta_path)
+        if fasta_path.is_dir():
+            # Look for individual chromosome file
+            chrom_file = fasta_path / f"{chrom}.fasta"
+            if not chrom_file.exists():
+                # Try without 'chr' prefix
+                alt_chrom = chrom.replace('chr', '')
+                chrom_file = fasta_path / f"{alt_chrom}.fasta"
+                if not chrom_file.exists():
+                    raise ValueError(f"Chromosome file not found: {chrom}.fasta in {fasta_path}")
+            fasta_path = chrom_file
         
         fasta = pysam.FastaFile(str(fasta_path))
         seq = fasta.fetch(chrom, start-1, end).upper()

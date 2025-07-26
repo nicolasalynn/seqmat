@@ -161,7 +161,11 @@ def cmd_search(args):
     print("-" * 50)
     
     for i, result in enumerate(results, 1):
-        print(f"{i:2d}. {result['gene_name']} ({result['biotype']})")
+        gene_id = result.get('gene_id', '')
+        if gene_id:
+            print(f"{i:2d}. {result['gene_name']} ({gene_id}) - {result['biotype']}")
+        else:
+            print(f"{i:2d}. {result['gene_name']} ({result['biotype']})")
     
     if len(results) == args.limit:
         print(f"\n(Showing first {args.limit} results)")

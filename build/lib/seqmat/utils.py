@@ -729,11 +729,11 @@ def print_data_summary():
 
 def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit: int = 10) -> List[Dict[str, str]]:
     """
-    Search for genes by name pattern.
+    Search for genes by name or ID pattern.
     
     Args:
         organism: Organism identifier (e.g., 'hg38')
-        query: Search query (gene name pattern)
+        query: Search query (gene name or ID pattern)
         biotype: Optional biotype filter
         limit: Maximum number of results
         
@@ -741,7 +741,18 @@ def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit
         List of dictionaries with gene information
     """
     results = []
+    query_upper = query.upper()  # Gene names are typically uppercase
     query_lower = query.lower()
+    
+    try:
+        from .config import get_organism_config
+        config = get_organism_config(organism)
+    except ValueError:
+        return []
+    
+    mrna_path = config.get('MRNA_PATH')
+    if not mrna_path:
+        return []
     
     if biotype:
         biotypes = [biotype]
@@ -749,17 +760,33 @@ def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit
         biotypes = list_gene_biotypes(organism)
     
     for bt in biotypes:
-        gene_names = get_gene_list(organism, bt, limit=1000)  # Get more for searching
+        biotype_path = Path(mrna_path) / bt
+        if not biotype_path.exists():
+            continue
         
-        for gene_name in gene_names:
-            if query_lower in gene_name.lower():
-                results.append({
-                    "organism": organism,
-                    "biotype": bt,
-                    "gene_name": gene_name
-                })
+        gene_files = list(biotype_path.glob("*.pkl"))
+        
+        for gene_file in gene_files:
+            # Extract gene info from filename: mrnas_ENSG123_GENENAME.pkl
+            filename = gene_file.stem
+            parts = filename.split('_', 2)  # Split into at most 3 parts
+            if len(parts) >= 3:
+                gene_id = parts[1]
+                gene_name = parts[2]
                 
-                if len(results) >= limit:
-                    return results
+                # Search in both gene name and gene ID
+                if (query_upper in gene_name or 
+                    query_lower in gene_name.lower() or
+                    query in gene_id or
+                    query_lower in gene_id.lower()):
+                    results.append({
+                        "organism": organism,
+                        "biotype": bt,
+                        "gene_name": gene_name,
+                        "gene_id": gene_id
+                    })
+                    
+                    if len(results) >= limit:
+                        return results
     
     return results
