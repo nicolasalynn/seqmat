@@ -805,6 +805,7 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
     """
     from .seqmat import SeqMat
     from .gene import Gene
+    from .config import get_organism_config
     
     if organism is None:
         organism = get_default_organism()
