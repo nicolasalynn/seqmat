@@ -468,7 +468,10 @@ def list_available_organisms() -> List[str]:
         List of organism names (e.g., ['hg38', 'mm39'])
     """
     config = load_config()
-    return list(config.keys())
+    # Filter out non-organism keys
+    non_organism_keys = {'default_organism', 'directory_structure', 'organism_data'}
+    organisms = [k for k in config.keys() if k not in non_organism_keys and isinstance(config[k], dict)]
+    return organisms
 
 
 def list_supported_organisms() -> List[str]:
