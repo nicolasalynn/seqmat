@@ -790,3 +790,256 @@ def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit
                         return results
     
     return results
+
+
+def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, Any]:
+    """
+    Comprehensive test of SeqMat installation and data setup.
+    
+    Args:
+        organism: Organism to test (uses default if None)
+        verbose: Print detailed output
+        
+    Returns:
+        Dictionary with test results
+    """
+    from .seqmat import SeqMat
+    from .gene import Gene
+    
+    if organism is None:
+        organism = get_default_organism()
+    
+    results = {
+        "organism": organism,
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "errors": [],
+        "warnings": []
+    }
+    
+    def test_step(name: str, func):
+        """Execute a test step and record results"""
+        if verbose:
+            print(f"\n🧪 Testing {name}...", end="", flush=True)
+        try:
+            result = func()
+            results["tests_passed"] += 1
+            if verbose:
+                print(" ✅")
+            return True, result
+        except Exception as e:
+            results["tests_failed"] += 1
+            results["errors"].append(f"{name}: {str(e)}")
+            if verbose:
+                print(f" ❌ {str(e)}")
+            return False, None
+    
+    if verbose:
+        print(f"🔬 Running comprehensive tests for {organism}")
+        print("=" * 50)
+    
+    # Test 1: Configuration
+    def test_config():
+        config = get_organism_config(organism)
+        assert config, "No configuration found"
+        assert 'MRNA_PATH' in config, "Missing MRNA_PATH"
+        assert 'CHROM_SOURCE' in config, "Missing CHROM_SOURCE"
+        return config
+    
+    success, config = test_step("Configuration", test_config)
+    if not success:
+        return results
+    
+    # Test 2: Directory structure
+    def test_directories():
+        paths_exist = {}
+        for key, path in config.items():
+            exists = Path(path).exists()
+            paths_exist[key] = exists
+            if not exists and key in ['MRNA_PATH', 'CHROM_SOURCE']:
+                raise ValueError(f"Critical path missing: {key} -> {path}")
+        return paths_exist
+    
+    test_step("Directory structure", test_directories)
+    
+    # Test 3: Chromosome files
+    def test_chromosomes():
+        chrom_path = Path(config['CHROM_SOURCE'])
+        chrom_files = list(chrom_path.glob("*.fasta"))
+        if not chrom_files:
+            raise ValueError("No chromosome files found")
+        # Test we can read from first chromosome
+        first_chrom = chrom_files[0].stem
+        return {"count": len(chrom_files), "first": first_chrom}
+    
+    success, chrom_info = test_step("Chromosome files", test_chromosomes)
+    
+    # Test 4: Gene annotations
+    def test_annotations():
+        biotypes = list_gene_biotypes(organism)
+        if not biotypes:
+            raise ValueError("No gene biotypes found")
+        gene_counts = count_genes(organism)
+        total_genes = sum(gene_counts.values())
+        if total_genes == 0:
+            raise ValueError("No genes found")
+        return {"biotypes": len(biotypes), "total_genes": total_genes}
+    
+    success, gene_info = test_step("Gene annotations", test_annotations)
+    
+    # Test 5: Gene search
+    def test_gene_search():
+        # Search for common genes
+        test_genes = ['KRAS', 'TP53', 'EGFR', 'BRCA1', 'MYC']
+        found_genes = []
+        for gene in test_genes:
+            results = search_genes(organism, gene, limit=1)
+            if results:
+                found_genes.append(gene)
+        if not found_genes:
+            raise ValueError("Could not find any common genes")
+        return {"searched": len(test_genes), "found": len(found_genes)}
+    
+    test_step("Gene search", test_gene_search)
+    
+    # Test 6: Load a specific gene
+    def test_gene_loading():
+        # Try to find and load a protein-coding gene
+        protein_genes = get_gene_list(organism, 'protein_coding', limit=10)
+        if not protein_genes:
+            raise ValueError("No protein coding genes found")
+        
+        # Try to load the first gene
+        gene_name = protein_genes[0]
+        gene = Gene.from_file(gene_name, organism=organism)
+        
+        # Verify gene properties
+        assert gene.gene_name == gene_name, f"Gene name mismatch: {gene.gene_name} != {gene_name}"
+        assert len(gene.transcripts) > 0, "Gene has no transcripts"
+        
+        return {
+            "gene_name": gene_name,
+            "gene_id": gene.gene_id,
+            "transcripts": len(gene.transcripts),
+            "chromosome": gene.chrm
+        }
+    
+    success, gene_data = test_step("Gene loading", test_gene_loading)
+    
+    # Test 7: SeqMat FASTA loading
+    def test_fasta_loading():
+        if not chrom_info:
+            raise ValueError("No chromosome info available")
+        
+        # Use first available chromosome
+        chrom = chrom_info['first']
+        # Try to load a small region
+        seq = SeqMat.from_fasta(
+            genome=organism,
+            chrom=chrom,
+            start=1000000,
+            end=1000100
+        )
+        
+        assert len(seq) == 101, f"Expected 101bp, got {len(seq)}"
+        assert seq.seq, "No sequence loaded"
+        assert all(c in 'ACGTN' for c in seq.seq), "Invalid nucleotides in sequence"
+        
+        return {
+            "chromosome": chrom,
+            "length": len(seq),
+            "sequence_preview": seq.seq[:20] + "..."
+        }
+    
+    if chrom_info:
+        test_step("FASTA loading", test_fasta_loading)
+    
+    # Test 8: Transcript operations
+    def test_transcript_ops():
+        if not gene_data:
+            raise ValueError("No gene data available")
+        
+        # Reload the gene
+        gene = Gene.from_file(gene_data['gene_name'], organism=organism)
+        
+        # Get primary transcript
+        transcript = gene.transcript()
+        
+        # Test basic properties
+        assert transcript.transcript_id, "No transcript ID"
+        assert len(transcript.exons) > 0, "No exons found"
+        
+        # Try to generate mature mRNA
+        transcript.generate_mature_mrna()
+        assert transcript.mature_mrna is not None, "Failed to generate mature mRNA"
+        assert len(transcript.mature_mrna) > 0, "Empty mature mRNA"
+        
+        return {
+            "transcript_id": transcript.transcript_id,
+            "exons": len(transcript.exons),
+            "mature_mrna_length": len(transcript.mature_mrna) if transcript.mature_mrna else 0,
+            "protein_coding": transcript.protein_coding
+        }
+    
+    if gene_data:
+        test_step("Transcript operations", test_transcript_ops)
+    
+    # Test 9: SeqMat mutations
+    def test_mutations():
+        # Create a simple sequence
+        seq = SeqMat("ATCGATCGATCG")
+        
+        # Apply mutations
+        mutations = [
+            (3, "C", "G"),      # SNP
+            (6, "-", "AAA"),    # Insertion
+            (10, "TC", "-")     # Deletion
+        ]
+        seq.apply_mutations(mutations)
+        
+        assert len(seq.mutations) == 3, f"Expected 3 mutations, got {len(seq.mutations)}"
+        assert seq.seq != "ATCGATCGATCG", "Sequence unchanged after mutations"
+        
+        return {
+            "original_length": 12,
+            "mutated_length": len(seq),
+            "mutations_applied": len(seq.mutations)
+        }
+    
+    test_step("Sequence mutations", test_mutations)
+    
+    # Test 10: Data summary
+    def test_data_summary():
+        summary = data_summary()
+        assert 'configured_organisms' in summary, "Missing configured organisms"
+        assert organism in summary['configured_organisms'], f"{organism} not in configured organisms"
+        return {
+            "configured_organisms": len(summary['configured_organisms']),
+            "total_genes": summary['totals']['genes']
+        }
+    
+    test_step("Data summary", test_data_summary)
+    
+    # Summary
+    if verbose:
+        print("\n" + "=" * 50)
+        print(f"📊 Test Summary for {organism}:")
+        print(f"   ✅ Passed: {results['tests_passed']}")
+        print(f"   ❌ Failed: {results['tests_failed']}")
+        
+        if results['errors']:
+            print("\n❌ Errors:")
+            for error in results['errors']:
+                print(f"   - {error}")
+        
+        if results['warnings']:
+            print("\n⚠️  Warnings:")
+            for warning in results['warnings']:
+                print(f"   - {warning}")
+        
+        if results['tests_failed'] == 0:
+            print("\n✨ All tests passed! SeqMat is properly installed and configured.")
+        else:
+            print("\n⚠️  Some tests failed. Please check the errors above.")
+    
+    return results

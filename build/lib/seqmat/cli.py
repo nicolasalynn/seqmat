@@ -14,7 +14,8 @@ from .utils import (
     count_genes,
     get_gene_list,
     search_genes,
-    get_organism_info
+    get_organism_info,
+    test_installation
 )
 from .config import get_available_organisms, get_default_organism, get_organism_info as get_organism_config_info
 
@@ -271,6 +272,12 @@ def main():
     info_parser.add_argument("--organism", help="Organism to query")
     info_parser.set_defaults(func=cmd_info)
     
+    # Test command
+    test_parser = subparsers.add_parser("test", help="Test SeqMat installation and data setup")
+    test_parser.add_argument("--organism", help="Organism to test (uses default if not specified)")
+    test_parser.add_argument("--quiet", action="store_true", help="Suppress detailed output")
+    test_parser.set_defaults(func=cmd_test)
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -280,6 +287,21 @@ def main():
     
     # Execute command
     args.func(args)
+
+
+def cmd_test(args):
+    """Run comprehensive tests on SeqMat installation"""
+    organism = args.organism
+    verbose = not args.quiet
+    
+    # Run tests
+    results = test_installation(organism, verbose=verbose)
+    
+    # Exit with appropriate code
+    if results['tests_failed'] > 0:
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 if __name__ == "__main__":
