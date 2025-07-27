@@ -108,7 +108,7 @@ def download_and_ungzip(external_url: str, local_path: Path, skip_existing: bool
 
 
 def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str, 
-                      cons_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                      cons_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Process transcript data from GTF dataframe."""
     if transcript_df.empty:
         return None
@@ -166,7 +166,7 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
             })
 
     # Add conservation data if available
-    if transcript.transcript_id in cons_data:
+    if cons_data and transcript.transcript_id in cons_data:
         data.update({
             'cons_available': True,
             'cons_vector': cons_data[transcript.transcript_id]['scores'],
@@ -179,7 +179,7 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
 
 
 def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: Path, 
-                                         cons_data: Dict[str, Any], 
+                                         cons_data: Optional[Dict[str, Any]], 
                                          gtex_file: Optional[Path] = None) -> None:
     """Parse Ensembl GTF annotations and create gene data files."""
     if not GTFPARSE_AVAILABLE:
@@ -356,19 +356,26 @@ def download_genome_data(organism: str, base_path: Path, skip_existing: bool = F
     urls = mapped_urls
     files = {}
     
-    # Download conservation data
-    files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
+    # Download conservation data if available
+    if urls.get('cons_url'):
+        files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
+    else:
+        files['cons_file'] = None
     
     # Download expression data if available
-    if urls['expression_url']:
+    if urls.get('expression_url'):
         files['gtex_file'] = download_and_ungzip(urls['expression_url'], base_path, skip_existing=skip_existing)
     else:
         files['gtex_file'] = None
     
     # Download genome FASTA
+    if not urls.get('fasta_url'):
+        raise ValueError(f"No FASTA URL configured for organism {organism}")
     files['fasta_file'] = download_and_ungzip(urls['fasta_url'], base_path, skip_existing=skip_existing)
     
     # Download Ensembl annotations
+    if not urls.get('ensembl_url'):
+        raise ValueError(f"No GTF URL configured for organism {organism}")
     files['ensembl_file'] = download_and_ungzip(urls['ensembl_url'], base_path, skip_existing=skip_existing)
     
     return files
@@ -431,8 +438,10 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     ensembl_annotation_path = base_path / 'annotations'
     ensembl_annotation_path.mkdir(exist_ok=True)
     
-    # Load conservation data
-    cons_data = unload_pickle(files['cons_file'])
+    # Load conservation data if available
+    cons_data = None
+    if files['cons_file'] is not None:
+        cons_data = unload_pickle(files['cons_file'])
     
     # Parse annotations
     retrieve_and_parse_ensembl_annotations(
@@ -985,10 +994,22 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
     if gene_data:
         test_step("Transcript operations", test_transcript_ops)
     
-    # Test 9: SeqMat mutations
+    # Test 9: SeqMat mutations and complement
     def test_mutations():
         # Create a simple sequence
         seq = SeqMat("ATCGATCGATCG")
+        original_seq = seq.seq
+        
+        # Test complement
+        comp = seq.complement()
+        expected_comp = "TAGCTAGCTAGC"
+        assert comp.seq == expected_comp, f"Complement failed: got {comp.seq}, expected {expected_comp}"
+        
+        # Test reverse complement
+        rev_comp = seq.clone()
+        rev_comp.reverse_complement()
+        expected_rev_comp = "CGATCGATCGAT"
+        assert rev_comp.seq == expected_rev_comp, f"Reverse complement failed: got {rev_comp.seq}, expected {expected_rev_comp}"
         
         # Apply mutations
         mutations = [
@@ -999,15 +1020,17 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
         seq.apply_mutations(mutations)
         
         assert len(seq.mutations) == 3, f"Expected 3 mutations, got {len(seq.mutations)}"
-        assert seq.seq != "ATCGATCGATCG", "Sequence unchanged after mutations"
+        assert seq.seq != original_seq, "Sequence unchanged after mutations"
         
         return {
             "original_length": 12,
             "mutated_length": len(seq),
-            "mutations_applied": len(seq.mutations)
+            "mutations_applied": len(seq.mutations),
+            "complement_test": "passed",
+            "reverse_complement_test": "passed"
         }
     
-    test_step("Sequence mutations", test_mutations)
+    test_step("Sequence mutations and complement", test_mutations)
     
     # Test 10: Data summary
     def test_data_summary():

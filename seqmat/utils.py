@@ -108,7 +108,7 @@ def download_and_ungzip(external_url: str, local_path: Path, skip_existing: bool
 
 
 def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str, 
-                      cons_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                      cons_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Process transcript data from GTF dataframe."""
     if transcript_df.empty:
         return None
@@ -166,7 +166,7 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
             })
 
     # Add conservation data if available
-    if transcript.transcript_id in cons_data:
+    if cons_data and transcript.transcript_id in cons_data:
         data.update({
             'cons_available': True,
             'cons_vector': cons_data[transcript.transcript_id]['scores'],
@@ -179,7 +179,7 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
 
 
 def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: Path, 
-                                         cons_data: Dict[str, Any], 
+                                         cons_data: Optional[Dict[str, Any]], 
                                          gtex_file: Optional[Path] = None) -> None:
     """Parse Ensembl GTF annotations and create gene data files."""
     if not GTFPARSE_AVAILABLE:
@@ -356,19 +356,26 @@ def download_genome_data(organism: str, base_path: Path, skip_existing: bool = F
     urls = mapped_urls
     files = {}
     
-    # Download conservation data
-    files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
+    # Download conservation data if available
+    if urls.get('cons_url'):
+        files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
+    else:
+        files['cons_file'] = None
     
     # Download expression data if available
-    if urls['expression_url']:
+    if urls.get('expression_url'):
         files['gtex_file'] = download_and_ungzip(urls['expression_url'], base_path, skip_existing=skip_existing)
     else:
         files['gtex_file'] = None
     
     # Download genome FASTA
+    if not urls.get('fasta_url'):
+        raise ValueError(f"No FASTA URL configured for organism {organism}")
     files['fasta_file'] = download_and_ungzip(urls['fasta_url'], base_path, skip_existing=skip_existing)
     
     # Download Ensembl annotations
+    if not urls.get('ensembl_url'):
+        raise ValueError(f"No GTF URL configured for organism {organism}")
     files['ensembl_file'] = download_and_ungzip(urls['ensembl_url'], base_path, skip_existing=skip_existing)
     
     return files
@@ -431,8 +438,10 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     ensembl_annotation_path = base_path / 'annotations'
     ensembl_annotation_path.mkdir(exist_ok=True)
     
-    # Load conservation data
-    cons_data = unload_pickle(files['cons_file'])
+    # Load conservation data if available
+    cons_data = None
+    if files['cons_file'] is not None:
+        cons_data = unload_pickle(files['cons_file'])
     
     # Parse annotations
     retrieve_and_parse_ensembl_annotations(
@@ -727,6 +736,68 @@ def print_data_summary():
         print()
 
 
+def get_all_genes(organism: str, biotype: Optional[str] = None) -> List[Dict[str, str]]:
+    """
+    Get all available genes for an organism, optionally filtered by biotype.
+    
+    Args:
+        organism: Organism identifier (e.g., 'hg38')
+        biotype: Optional biotype filter (e.g., 'protein_coding', 'lncRNA')
+        
+    Returns:
+        List of dictionaries with gene information including:
+        - organism: The organism identifier
+        - biotype: The gene biotype
+        - gene_name: The gene name
+        - gene_id: The gene ID (e.g., ENSG00000133703)
+    """
+    results = []
+    
+    try:
+        from .config import get_organism_config
+        config = get_organism_config(organism)
+    except ValueError:
+        return []
+    
+    mrna_path = config.get('MRNA_PATH')
+    if not mrna_path or not Path(mrna_path).exists():
+        return []
+    
+    # Get biotypes to search
+    if biotype:
+        biotypes = [biotype]
+    else:
+        biotypes = list_gene_biotypes(organism)
+    
+    # Collect all genes from each biotype
+    for bt in biotypes:
+        biotype_path = Path(mrna_path) / bt
+        if not biotype_path.exists():
+            continue
+        
+        gene_files = list(biotype_path.glob("*.pkl"))
+        
+        for gene_file in gene_files:
+            # Extract gene info from filename: mrnas_ENSG123_GENENAME.pkl
+            filename = gene_file.stem
+            parts = filename.split('_', 2)  # Split into at most 3 parts
+            if len(parts) >= 3:
+                gene_id = parts[1]
+                gene_name = parts[2]
+                
+                results.append({
+                    "organism": organism,
+                    "biotype": bt,
+                    "gene_name": gene_name,
+                    "gene_id": gene_id
+                })
+    
+    # Sort results by gene name for consistency
+    results.sort(key=lambda x: x['gene_name'])
+    
+    return results
+
+
 def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit: int = 10) -> List[Dict[str, str]]:
     """
     Search for genes by name or ID pattern.
@@ -985,10 +1056,22 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
     if gene_data:
         test_step("Transcript operations", test_transcript_ops)
     
-    # Test 9: SeqMat mutations
+    # Test 9: SeqMat mutations and complement
     def test_mutations():
         # Create a simple sequence
         seq = SeqMat("ATCGATCGATCG")
+        original_seq = seq.seq
+        
+        # Test complement
+        comp = seq.complement()
+        expected_comp = "TAGCTAGCTAGC"
+        assert comp.seq == expected_comp, f"Complement failed: got {comp.seq}, expected {expected_comp}"
+        
+        # Test reverse complement
+        rev_comp = seq.clone()
+        rev_comp.reverse_complement()
+        expected_rev_comp = "CGATCGATCGAT"
+        assert rev_comp.seq == expected_rev_comp, f"Reverse complement failed: got {rev_comp.seq}, expected {expected_rev_comp}"
         
         # Apply mutations
         mutations = [
@@ -999,15 +1082,17 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
         seq.apply_mutations(mutations)
         
         assert len(seq.mutations) == 3, f"Expected 3 mutations, got {len(seq.mutations)}"
-        assert seq.seq != "ATCGATCGATCG", "Sequence unchanged after mutations"
+        assert seq.seq != original_seq, "Sequence unchanged after mutations"
         
         return {
             "original_length": 12,
             "mutated_length": len(seq),
-            "mutations_applied": len(seq.mutations)
+            "mutations_applied": len(seq.mutations),
+            "complement_test": "passed",
+            "reverse_complement_test": "passed"
         }
     
-    test_step("Sequence mutations", test_mutations)
+    test_step("Sequence mutations and complement", test_mutations)
     
     # Test 10: Data summary
     def test_data_summary():

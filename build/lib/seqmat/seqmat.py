@@ -348,6 +348,10 @@ class SeqMat:
         """
         Apply SNPs/insertions/deletions to the sequence.
         
+        Mutations are always defined relative to the positive strand. If the sequence
+        is currently on the negative strand, it will be temporarily converted to the
+        positive strand for mutation application, then converted back.
+        
         Args:
             mutations: Single mutation or list of (pos, ref, alt) tuples
             permissive_ref: If True, skip reference validation
@@ -360,29 +364,41 @@ class SeqMat:
         if not self._validate_mutation_batch(mutations):
             return self
 
-        for pos, ref, alt in mutations:
-            # left normalize
-            while ref and alt and ref[0] == alt[0]:
-                pos += 1
-                ref = ref[1:] or '-'
-                alt = alt[1:] or '-'
-            # out-of-range
-            if not contains(self.index, pos):
-                continue
-            typ = self._classify_mutation(ref, alt)
-            self.mutations.append({'pos': pos, 'ref': ref, 'alt': alt, 'type': typ})
+        # Track original strand state
+        was_on_negative_strand = self.rev
+        
+        # If on negative strand, convert to positive strand for mutation application
+        if was_on_negative_strand:
+            self.reverse_complement()  # Convert to positive strand
             
-            if typ == 'snp':
-                self._substitute(pos, ref, alt, permissive_ref)
-            elif typ == 'ins':
-                self._insert(pos, alt)
-            elif typ == 'del':
-                self._delete(pos, ref)
-            elif typ == 'complex':
-                # first delete the reference bases
-                self._delete(pos, ref)
-                # then insert the new bases
-                self._insert(pos, alt)
+        try:
+            for pos, ref, alt in mutations:
+                # left normalize
+                while ref and alt and ref[0] == alt[0]:
+                    pos += 1
+                    ref = ref[1:] or '-'
+                    alt = alt[1:] or '-'
+                # out-of-range
+                if not contains(self.index, pos):
+                    continue
+                typ = self._classify_mutation(ref, alt)
+                self.mutations.append({'pos': pos, 'ref': ref, 'alt': alt, 'type': typ})
+                
+                if typ == 'snp':
+                    self._substitute(pos, ref, alt, permissive_ref)
+                elif typ == 'ins':
+                    self._insert(pos, alt)
+                elif typ == 'del':
+                    self._delete(pos, ref)
+                elif typ == 'complex':
+                    # first delete the reference bases
+                    self._delete(pos, ref)
+                    # then insert the new bases
+                    self._insert(pos, alt)
+        finally:
+            # Always restore original strand state if we converted
+            if was_on_negative_strand:
+                self.reverse_complement()  # Convert back to negative strand
     
         self._refresh_mutation_state()
         return self
@@ -424,20 +440,76 @@ class SeqMat:
             self.seq_array['valid'][mask] = False
             self.seq_array['mut_type'][mask] = b'del'
 
-    def complement(self) -> SeqMat:
-        """Return the complement of the sequence (A<->T, C<->G)."""
-        new = self.clone()
-        mp = {b'A': b'T', b'T': b'A', b'C': b'G', b'G': b'C', b'N': b'N', b'-': b'-'}
-        for o, c in mp.items():
-            new.seq_array['nt'][new.seq_array['nt'] == o] = c
-        return new
+    def complement(self, copy: bool = False) -> SeqMat:
+        """
+        Complement the sequence (A<->T, C<->G) in-place or return a copy.
+        
+        Args:
+            copy: If True, return a new SeqMat object instead of modifying in-place
+            
+        Returns:
+            Self (for chaining) or new SeqMat if copy=True
+        """
+        if copy:
+            new = self.clone()
+            # Use a temporary placeholder to avoid double replacement
+            temp_array = new.seq_array['nt'].copy()
+            temp_array[new.seq_array['nt'] == b'A'] = b'T'
+            temp_array[new.seq_array['nt'] == b'T'] = b'A'
+            temp_array[new.seq_array['nt'] == b'C'] = b'G'
+            temp_array[new.seq_array['nt'] == b'G'] = b'C'
+            # N and - stay the same
+            new.seq_array['nt'] = temp_array
+            return new
+        else:
+            # In-place modification
+            temp_array = self.seq_array['nt'].copy()
+            temp_array[self.seq_array['nt'] == b'A'] = b'T'
+            temp_array[self.seq_array['nt'] == b'T'] = b'A'
+            temp_array[self.seq_array['nt'] == b'C'] = b'G'
+            temp_array[self.seq_array['nt'] == b'G'] = b'C'
+            # N and - stay the same
+            self.seq_array['nt'] = temp_array
+            return self
 
-    def reverse_complement(self) -> SeqMat:
-        """Reverse-complement the sequence in place."""
-        self.complement()
-        self.seq_array = self.seq_array[::-1].copy()
-        self.rev = not self.rev
-        return self
+    def reverse_complement(self, copy: bool = False) -> SeqMat:
+        """
+        Reverse-complement the sequence in-place or return a copy.
+        
+        Args:
+            copy: If True, return a new SeqMat object instead of modifying in-place
+            
+        Returns:
+            Self (for chaining) or new SeqMat if copy=True
+        """
+        if copy:
+            new = self.clone()
+            # Apply complement mapping using temporary array
+            temp_array = new.seq_array['nt'].copy()
+            temp_array[new.seq_array['nt'] == b'A'] = b'T'
+            temp_array[new.seq_array['nt'] == b'T'] = b'A'
+            temp_array[new.seq_array['nt'] == b'C'] = b'G'
+            temp_array[new.seq_array['nt'] == b'G'] = b'C'
+            new.seq_array['nt'] = temp_array
+            
+            # Reverse the sequence
+            new.seq_array = new.seq_array[::-1].copy()
+            new.rev = not new.rev
+            return new
+        else:
+            # In-place modification
+            # Apply complement mapping in place using temporary array
+            temp_array = self.seq_array['nt'].copy()
+            temp_array[self.seq_array['nt'] == b'A'] = b'T'
+            temp_array[self.seq_array['nt'] == b'T'] = b'A'
+            temp_array[self.seq_array['nt'] == b'C'] = b'G'
+            temp_array[self.seq_array['nt'] == b'G'] = b'C'
+            self.seq_array['nt'] = temp_array
+            
+            # Reverse the sequence
+            self.seq_array = self.seq_array[::-1].copy()
+            self.rev = not self.rev
+            return self
 
     def remove_regions(self, regions: List[Tuple[int, int]]) -> SeqMat:
         """
