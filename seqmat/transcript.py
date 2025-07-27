@@ -135,7 +135,21 @@ class Transcript:
         """Return a list of intron boundaries derived from donors and acceptors."""
         valid_donors = self.donors[self.donors != self.transcript_end]
         valid_acceptors = self.acceptors[self.acceptors != self.transcript_start]
-        return list(zip(valid_donors, valid_acceptors))
+        
+        # Adjust intron boundaries to exclude exon splice sites
+        introns = []
+        for donor, acceptor in zip(valid_donors, valid_acceptors):
+            if self.rev:
+                # For reverse strand: intron from (donor-1) to (acceptor+1)
+                intron_start = donor - 1
+                intron_end = acceptor + 1
+            else:
+                # For forward strand: intron from (donor+1) to (acceptor-1)
+                intron_start = donor + 1
+                intron_end = acceptor - 1
+            introns.append((intron_start, intron_end))
+        
+        return introns
 
     @property
     def introns_pos(self) -> List[Tuple[int, int]]:

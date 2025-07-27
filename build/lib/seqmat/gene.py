@@ -94,8 +94,18 @@ class Gene:
             print(f"Organism '{organism}' not configured. Run setup_genomics_data() first.")
             return None
             
-        # Find gene data files in the configured organism MRNA path
-        gene_files = list((config['MRNA_PATH'] / 'protein_coding').glob(f'*_{gene_name}.pkl'))
+        # Search through all biotype folders in the configured organism MRNA path
+        mrna_path = Path(config['MRNA_PATH'])
+        gene_files = []
+        
+        # Look through all biotype subdirectories
+        if mrna_path.exists():
+            for biotype_dir in mrna_path.iterdir():
+                if biotype_dir.is_dir():
+                    # Search for gene files matching the name
+                    matching_files = list(biotype_dir.glob(f'*_{gene_name}.pkl'))
+                    gene_files.extend(matching_files)
+        
         if not gene_files:
             print(f"No files available for gene '{gene_name}'.")
             return None

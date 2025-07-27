@@ -736,6 +736,68 @@ def print_data_summary():
         print()
 
 
+def get_all_genes(organism: str, biotype: Optional[str] = None) -> List[Dict[str, str]]:
+    """
+    Get all available genes for an organism, optionally filtered by biotype.
+    
+    Args:
+        organism: Organism identifier (e.g., 'hg38')
+        biotype: Optional biotype filter (e.g., 'protein_coding', 'lncRNA')
+        
+    Returns:
+        List of dictionaries with gene information including:
+        - organism: The organism identifier
+        - biotype: The gene biotype
+        - gene_name: The gene name
+        - gene_id: The gene ID (e.g., ENSG00000133703)
+    """
+    results = []
+    
+    try:
+        from .config import get_organism_config
+        config = get_organism_config(organism)
+    except ValueError:
+        return []
+    
+    mrna_path = config.get('MRNA_PATH')
+    if not mrna_path or not Path(mrna_path).exists():
+        return []
+    
+    # Get biotypes to search
+    if biotype:
+        biotypes = [biotype]
+    else:
+        biotypes = list_gene_biotypes(organism)
+    
+    # Collect all genes from each biotype
+    for bt in biotypes:
+        biotype_path = Path(mrna_path) / bt
+        if not biotype_path.exists():
+            continue
+        
+        gene_files = list(biotype_path.glob("*.pkl"))
+        
+        for gene_file in gene_files:
+            # Extract gene info from filename: mrnas_ENSG123_GENENAME.pkl
+            filename = gene_file.stem
+            parts = filename.split('_', 2)  # Split into at most 3 parts
+            if len(parts) >= 3:
+                gene_id = parts[1]
+                gene_name = parts[2]
+                
+                results.append({
+                    "organism": organism,
+                    "biotype": bt,
+                    "gene_name": gene_name,
+                    "gene_id": gene_id
+                })
+    
+    # Sort results by gene name for consistency
+    results.sort(key=lambda x: x['gene_name'])
+    
+    return results
+
+
 def search_genes(organism: str, query: str, biotype: Optional[str] = None, limit: int = 10) -> List[Dict[str, str]]:
     """
     Search for genes by name or ID pattern.
