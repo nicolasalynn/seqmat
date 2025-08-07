@@ -154,30 +154,32 @@ class SeqMat:
         Returns:
             SeqMat object containing the requested sequence
         """
-        config = get_organism_config(genome)
+        # config = get_organism_config(genome)
         
-        # Try different possible paths for FASTA files
-        chrom_source = config.get('CHROM_SOURCE')
-        fasta_path = config.get('fasta', chrom_source)
+        # # Try different possible paths for FASTA files
+        # chrom_source = config.get('CHROM_SOURCE')
+        # fasta_path = config.get('fasta', chrom_source)
         
-        if fasta_path is None:
-            raise ValueError(f"No FASTA path configured for genome '{genome}'")
+        # if fasta_path is None:
+        #     raise ValueError(f"No FASTA path configured for genome '{genome}'")
         
-        # Check if it's a directory with individual chromosome files
-        fasta_path = Path(fasta_path)
-        if fasta_path.is_dir():
-            # Look for individual chromosome file
-            chrom_file = fasta_path / f"{chrom}.fasta"
-            if not chrom_file.exists():
-                # Try without 'chr' prefix
-                alt_chrom = chrom.replace('chr', '')
-                chrom_file = fasta_path / f"{alt_chrom}.fasta"
-                if not chrom_file.exists():
-                    raise ValueError(f"Chromosome file not found: {chrom}.fasta in {fasta_path}")
-            fasta_path = chrom_file
-        
-        fasta = pysam.FastaFile(str(fasta_path))
-        seq = fasta.fetch(chrom, start-1, end).upper()
+        # # Check if it's a directory with individual chromosome files
+        # fasta_path = Path(fasta_path)
+        # if fasta_path.is_dir():
+        #     # Look for individual chromosome file
+        #     chrom_file = fasta_path / f"{chrom}.fasta"
+        #     if not chrom_file.exists():
+        #         # Try without 'chr' prefix
+        #         alt_chrom = chrom.replace('chr', '')
+        #         chrom_file = fasta_path / f"{alt_chrom}.fasta"
+        #         if not chrom_file.exists():
+        #             raise ValueError(f"Chromosome file not found: {chrom}.fasta in {fasta_path}")
+        #     fasta_path = chrom_file
+        # fasta = pysam.FastaFile(str(fasta_path))
+
+        fasta = pysam.FastaFile(str('/tamir2/nicolaslynn/data/genomes/grch38/full/hg38.fa'))
+
+        seq = fasta.fetch(f'chr{chrom}', start-1, end).upper()
         indices = np.arange(start, end+1, dtype=np.int64)
         return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", source=genome, **kwargs)
 
@@ -211,6 +213,14 @@ class SeqMat:
     def index(self) -> np.ndarray:
         """Return the genomic indices of valid bases."""
         return self.seq_array['index'][self.seq_array['valid']]
+
+    @property
+    def mutation_vector(self) -> np.ndarray:
+        """Return a binary vector indicating mutated positions (1=mutated, 0=not mutated)."""
+        valid_mask = self.seq_array['valid']
+        indices = self.seq_array['index'][valid_mask]
+        mutated_array = np.array(list(self.mutated_positions), dtype=np.int64)
+        return np.isin(indices, mutated_array).astype(np.int8)
 
     def _refresh_mutation_state(self) -> None:
         """Update mutation tracking based on current state."""
