@@ -1129,3 +1129,10 @@ def test_installation(organism: str = None, verbose: bool = True) -> Dict[str, A
             print("\n⚠️  Some tests failed. Please check the errors above.")
     
     return results
+
+
+def generate_random_sequence(k=15_000):
+    import random
+    bases = ['A', 'C', 'G', 'T']
+    seq = ''.join(random.choices(bases, k=k))
+    return seq
