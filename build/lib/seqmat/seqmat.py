@@ -575,3 +575,117 @@ class SeqMat:
             lines.append(seq[i:i+wrap])
         
         return '\n'.join(lines)
+    
+    def reset_mutation_vector(self) -> None:
+        """
+        Reset mutation tracking (mutated_positions, mut_type) while preserving
+        the current nucleotides (nt) and reference info.
+        This means the current sequence becomes the new baseline.
+        """
+        # Clear existing mutation annotations
+        self.seq_array['ref'] = self.seq_array['nt']    # new reference = current nt
+        self.seq_array['mut_type'] = b''                # clear mutation type
+        self.insertions.clear()                         # clear insertion tracking
+        self.mutations.clear()                          # clear mutation history
+        self.mutated_positions.clear()                  # clear mutation set
+
+
+    # ---------- Fast I/O ----------
+    def save_seqmat(self, path: Union[str, Path], *, compressed: bool = False) -> Path:
+        """
+        Save the entire SeqMat to a single .npz (fast).
+        - The structured seq_array is stored verbatim (zero copy conversion).
+        - Python containers (insertions, mutations, mutated_positions, notes) are pickled.
+        - If predicted_splicing exists, it is saved to a sibling .parquet file.
+
+        Args:
+            path: target file path ('.npz' will be appended if missing)
+            compressed: if True, use np.savez_compressed (slower, smaller)
+
+        Returns:
+            The written .npz Path
+        """
+        path = Path(path)
+        if path.suffix.lower() != ".npz":
+            path = path.with_suffix(".npz")
+
+        meta = {
+            "name": self.name,
+            "version": self.version,
+            "source": self.source,
+            "rev": self.rev,
+            "has_predicted_splicing": self.predicted_splicing is not None,
+        }
+
+        # For maximum speed, use np.savez (zip, no deflate). Set allow_pickle=True for load.
+        saver = np.savez_compressed if compressed else np.savez
+
+        # Write atomically
+        tmp = path.with_suffix(".npz.tmp")
+        saver(
+            tmp,
+            seq_array=self.seq_array,                                # structured array
+            meta=np.array(meta, dtype=object),                       # small dict (pickled)
+            notes=np.array(self.notes, dtype=object),                # user metadata (pickled)
+            insertions=np.array(dict(self.insertions), dtype=object),# defaultdict(list) (pickled)
+            mutations=np.array(self.mutations, dtype=object),        # list[dict] (pickled)
+            mutated_positions=np.array(list(self.mutated_positions), dtype=np.int64),
+        )
+        tmp.replace(path)
+
+        # Save DataFrame separately if present (fast columnar)
+        if self.predicted_splicing is not None:
+            ppath = path.with_suffix(".parquet")
+            # Use pandas fast parquet writer if available
+            try:
+                self.predicted_splicing.to_parquet(ppath, index=False)
+            except Exception:
+                # Feather as fallback
+                self.predicted_splicing.reset_index(drop=True).to_feather(ppath.with_suffix(".feather"))
+
+        return path
+
+    @classmethod
+    def read_seqmat(cls, path: Union[str, Path]) -> "SeqMat":
+        """
+        Load a SeqMat saved by save_seqmat() (fast).
+        Returns:
+            SeqMat instance with all fields restored.
+        """
+        path = Path(path)
+        if path.suffix.lower() != ".npz":
+            path = path.with_suffix(".npz")
+
+        with np.load(path, allow_pickle=True) as z:
+            seq_array = z["seq_array"]
+            meta = z["meta"].item() if isinstance(z["meta"], np.ndarray) else z["meta"]
+            notes = z["notes"].item() if isinstance(z["notes"], np.ndarray) else z["notes"]
+
+            # Containers
+            ins_obj = z["insertions"].item() if isinstance(z["insertions"], np.ndarray) else z["insertions"]
+            mut_list = z["mutations"].tolist() if hasattr(z["mutations"], "tolist") else z["mutations"]
+            mutated_positions = set(map(int, z["mutated_positions"].tolist()))
+
+        # Build a blank instance and populate directly to avoid recomputing arrays
+        obj = object.__new__(cls)
+        # Metadata
+        obj.name = meta.get("name", "wild_type")
+        obj.version = meta.get("version", "1.0")
+        obj.source = meta.get("source", "Unknown")
+        obj.notes = notes if isinstance(notes, dict) else dict(notes)
+        obj.rev = bool(meta.get("rev", False))
+        obj.predicted_splicing = None
+
+        # Core storage
+        obj.seq_array = seq_array
+        # Ensure types
+        from collections import defaultdict
+        dl = defaultdict(list)
+        dl.update(ins_obj if isinstance(ins_obj, dict) else dict(ins_obj))
+        obj.insertions = dl
+        obj.mutations = list(mut_list) if isinstance(mut_list, (list, tuple)) else []
+        obj.mutated_positions = mutated_positions
+
+        # Keep slots that are not persisted explicitly in a clean state
+        # (no additional refresh needed; seq_array already contains nt/ref/valid/mut_type)
+        return obj
