@@ -62,7 +62,7 @@ class SeqMat:
         version: str = '1.0',
         notes: Optional[dict] = None,
         rev: bool = False,
-        seq: Optional[str] = None  # Alternative parameter name
+        seq: Optional[str] = None,     # Alternative parameter name
     ) -> None:
         # Handle alternative parameter names
         if seq is not None and not nucleotides:
@@ -139,18 +139,20 @@ class SeqMat:
         chrom: str,
         start: int,
         end: int,
+        source_fasta: Optional[Path] = Path('/tamir2/nicolaslynn/data/genomes/grch38/full/hg38.fa'),
         **kwargs
     ) -> SeqMat:
         """
         Load a genomic interval from FASTA.
-        
+
         Args:
             genome: Genome identifier (e.g. 'hg38')
             chrom: Chromosome name
             start: Start position (1-based)
             end: End position (1-based, inclusive)
+            source_fasta: Path to the FASTA file to load from
             **kwargs: Additional arguments for SeqMat constructor
-            
+
         Returns:
             SeqMat object containing the requested sequence
         """
@@ -177,8 +179,7 @@ class SeqMat:
         #     fasta_path = chrom_file
         # fasta = pysam.FastaFile(str(fasta_path))
 
-        fasta = pysam.FastaFile(str('/tamir2/nicolaslynn/data/genomes/grch38/full/hg38.fa'))
-
+        fasta = pysam.FastaFile(str(source_fasta))
         seq = fasta.fetch(f'{chrom}', start-1, end).upper()
         indices = np.arange(start, end+1, dtype=np.int64)
         return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", source=genome, **kwargs)

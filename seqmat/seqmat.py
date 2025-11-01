@@ -182,7 +182,7 @@ class SeqMat:
         fasta = pysam.FastaFile(str(source_fasta))
         seq = fasta.fetch(f'{chrom}', start-1, end).upper()
         indices = np.arange(start, end+1, dtype=np.int64)
-        return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", source=genome, source_fasta=source_fasta, **kwargs)
+        return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", source=genome, **kwargs)
 
     @classmethod
     def from_fasta_file(cls, fasta_path: Union[str, Path], chrom: str, start: int, end: int, **kwargs) -> SeqMat:
