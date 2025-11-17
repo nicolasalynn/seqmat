@@ -22,7 +22,7 @@ try:
 except ImportError:
     POLARS_AVAILABLE = False
 
-from .config import save_config, load_config, get_default_organism, get_directory_config, get_available_organisms, DEFAULT_ORGANISM_DATA, get_organism_info
+from .config import save_config, load_config, get_default_organism, get_directory_config, get_available_organisms, DEFAULT_ORGANISM_DATA, get_organism_info, get_data_dir
 
 
 def dump_pickle(path: Union[str, Path], data: Any) -> None:

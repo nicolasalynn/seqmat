@@ -8,7 +8,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="seqmat",
-    version="0.1.33",
+    version="0.1.34",
     author="Nicolas Lynn Vila",
     author_email="nicolasalynn@gmail.com",
     description="Lightning-fast gene manipulation and analysis library.",
@@ -35,6 +35,7 @@ setup(
         "tqdm>=4.62.0",
         "biopython>=1.79",
         "gtfparse>=1.2.0",
+        "platformdirs>=3.0.0",
     ],
     extras_require={
         "dev": [
