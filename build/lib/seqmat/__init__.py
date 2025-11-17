@@ -5,17 +5,17 @@ A comprehensive Python library for genomic sequence analysis with full mutation 
 splicing analysis, and sequence manipulation.
 """
 
-__version__ = "0.1.32"
+__version__ = "0.1.34"
 __author__ = "Nicolas Lynn Vila"
 __email__ = "nicolasalynn@gmail.com"
 
 from .seqmat import SeqMat
 from .gene import Gene
 from .transcript import Transcript
-from .config import get_default_organism
+from .config import get_default_organism, get_data_dir, get_config_dir
 from .utils import (
-    setup_genomics_data, 
-    load_config, 
+    setup_genomics_data,
+    load_config,
     save_config,
     list_available_organisms,
     list_supported_organisms,
@@ -31,14 +31,16 @@ from .utils import (
 
 __all__ = [
     "SeqMat",
-    "Gene", 
+    "Gene",
     "Transcript",
     "get_default_organism",
+    "get_data_dir",
+    "get_config_dir",
     "setup_genomics_data",
     "load_config",
     "save_config",
     "list_available_organisms",
-    "list_supported_organisms", 
+    "list_supported_organisms",
     "get_organism_info",
     "list_gene_biotypes",
     "count_genes",

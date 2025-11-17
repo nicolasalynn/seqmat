@@ -3,8 +3,11 @@ import os
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from platformdirs import user_config_dir, user_data_dir
 
-DEFAULT_CONFIG_DIR = Path.home() / '.seqmat'
+# Use XDG Base Directory specification
+DEFAULT_CONFIG_DIR = Path(user_config_dir("seqmat", appauthor=False))
+DEFAULT_DATA_DIR = Path(user_data_dir("seqmat", appauthor=False))
 CONFIG_FILE = DEFAULT_CONFIG_DIR / 'config.json'
 
 # Default organism data sources - can be overridden in config
@@ -108,3 +111,17 @@ def get_directory_config() -> Dict[str, str]:
     """Get directory structure configuration"""
     config = load_config()
     return config.get('directory_structure', DEFAULT_SETTINGS['directory_structure'])
+
+def get_data_dir() -> Path:
+    """
+    Get the data directory where genomic data files are stored.
+    Returns the user data directory following OS conventions.
+    """
+    return DEFAULT_DATA_DIR
+
+def get_config_dir() -> Path:
+    """
+    Get the config directory where configuration files are stored.
+    Returns the user config directory following OS conventions.
+    """
+    return DEFAULT_CONFIG_DIR

@@ -17,7 +17,7 @@ from .utils import (
     get_organism_info,
     test_installation
 )
-from .config import get_available_organisms, get_default_organism, get_organism_info as get_organism_config_info
+from .config import get_available_organisms, get_default_organism, get_organism_info as get_organism_config_info, get_data_dir
 
 
 def cmd_setup(args):
@@ -223,11 +223,13 @@ def main():
     
     # Setup command
     setup_parser = subparsers.add_parser("setup", help="Set up genomics data")
-    setup_parser.add_argument("--path", required=True, help="Base path for data storage")
+    default_data_dir = str(get_data_dir())
+    setup_parser.add_argument("--path", default=default_data_dir,
+                             help=f"Base path for data storage (default: {default_data_dir})")
     # Get available organisms dynamically
     available_organisms = get_available_organisms()
     default_organism = get_default_organism()
-    setup_parser.add_argument("--organism", default=default_organism, choices=available_organisms, 
+    setup_parser.add_argument("--organism", default=default_organism, choices=available_organisms,
                              help=f"Organism to set up (default: {default_organism})")
     setup_parser.add_argument("--force", action="store_true", help="Force overwrite existing data")
     setup_parser.add_argument("--pickup", action="store_true", help="Resume interrupted setup, reuse existing downloaded files")
