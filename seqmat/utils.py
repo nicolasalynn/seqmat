@@ -478,6 +478,37 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     print("You can now use Gene.from_file() to load gene data.")
 
 
+def set_fasta_path(fasta_path: str, organism: Optional[str] = None) -> None:
+    """
+    Set the full genome FASTA path for an organism.
+
+    This is useful when you have a FASTA file but haven't run the full setup,
+    or need to update the FASTA path.
+
+    Args:
+        fasta_path: Path to the full genome FASTA file
+        organism: Organism identifier (uses default if None)
+    """
+    if organism is None:
+        organism = get_default_organism()
+
+    fasta_path = Path(fasta_path)
+    if not fasta_path.exists():
+        raise ValueError(f"FASTA file not found: {fasta_path}")
+
+    config = load_config()
+
+    if organism not in config:
+        config[organism] = {}
+
+    config[organism]['fasta_full_genome'] = str(fasta_path)
+    save_config(config)
+
+    from .config import CONFIG_FILE
+    print(f"Set fasta_full_genome for {organism} to: {fasta_path}")
+    print(f"Configuration saved to: {CONFIG_FILE}")
+
+
 def list_available_organisms() -> List[str]:
     """
     List all organisms that have been configured.

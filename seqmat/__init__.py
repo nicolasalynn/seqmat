@@ -5,7 +5,7 @@ A comprehensive Python library for genomic sequence analysis with full mutation 
 splicing analysis, and sequence manipulation.
 """
 
-__version__ = "0.1.34"
+__version__ = "0.1.43"
 __author__ = "Nicolas Lynn Vila"
 __email__ = "nicolasalynn@gmail.com"
 
@@ -15,6 +15,7 @@ from .transcript import Transcript
 from .config import get_default_organism, get_data_dir, get_config_dir
 from .utils import (
     setup_genomics_data,
+    set_fasta_path,
     load_config,
     save_config,
     list_available_organisms,
@@ -38,6 +39,7 @@ __all__ = [
     "get_data_dir",
     "get_config_dir",
     "setup_genomics_data",
+    "set_fasta_path",
     "load_config",
     "save_config",
     "list_available_organisms",

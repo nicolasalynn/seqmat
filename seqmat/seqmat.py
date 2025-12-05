@@ -158,24 +158,22 @@ class SeqMat:
         """
         if source_fasta is None:
             config = get_organism_config(genome)
-            source_fasta = config.get('fasta_full_genome')
+
+            # First try individual chromosome files from CHROM_SOURCE
+            chrom_source = config.get('CHROM_SOURCE')
+            if chrom_source:
+                chrom_path = Path(chrom_source)
+                # Try {chrom}.fasta naming convention
+                chrom_file = chrom_path / f"{chrom}.fasta"
+                if chrom_file.exists():
+                    source_fasta = chrom_file
+
+            # Fall back to full genome FASTA if no chromosome file found
             if source_fasta is None:
-                raise ValueError(f"No 'fasta_full_genome' configured for genome '{genome}'. "
-                               f"Set it in config or pass source_fasta explicitly.")
-        
-        # # Check if it's a directory with individual chromosome files
-        # fasta_path = Path(fasta_path)
-        # if fasta_path.is_dir():
-        #     # Look for individual chromosome file
-        #     chrom_file = fasta_path / f"{chrom}.fasta"
-        #     if not chrom_file.exists():
-        #         # Try without 'chr' prefix
-        #         alt_chrom = chrom.replace('chr', '')
-        #         chrom_file = fasta_path / f"{alt_chrom}.fasta"
-        #         if not chrom_file.exists():
-        #             raise ValueError(f"Chromosome file not found: {chrom}.fasta in {fasta_path}")
-        #     fasta_path = chrom_file
-        # fasta = pysam.FastaFile(str(fasta_path))
+                source_fasta = config.get('fasta_full_genome')
+                if source_fasta is None:
+                    raise ValueError(f"No chromosome files in CHROM_SOURCE or 'fasta_full_genome' configured for genome '{genome}'. "
+                                   f"Run setup_genomics_data() or set fasta path in config.")
 
         fasta = pysam.FastaFile(str(source_fasta))
         seq = fasta.fetch(f'{chrom}', start-1, end).upper()
