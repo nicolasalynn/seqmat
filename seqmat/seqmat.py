@@ -139,7 +139,7 @@ class SeqMat:
         chrom: str,
         start: int,
         end: int,
-        source_fasta: Optional[Path] = Path('/tamir2/nicolaslynn/data/genomes/grch38/full/hg38.fa'),
+        source_fasta: Optional[Path] = None,
         **kwargs
     ) -> SeqMat:
         """
@@ -150,20 +150,18 @@ class SeqMat:
             chrom: Chromosome name
             start: Start position (1-based)
             end: End position (1-based, inclusive)
-            source_fasta: Path to the FASTA file to load from
+            source_fasta: Path to the FASTA file. If None, uses 'fasta_full_genome' from config.
             **kwargs: Additional arguments for SeqMat constructor
 
         Returns:
             SeqMat object containing the requested sequence
         """
-        # config = get_organism_config(genome)
-        
-        # # Try different possible paths for FASTA files
-        # chrom_source = config.get('CHROM_SOURCE')
-        # fasta_path = config.get('fasta', chrom_source)
-        
-        # if fasta_path is None:
-        #     raise ValueError(f"No FASTA path configured for genome '{genome}'")
+        if source_fasta is None:
+            config = get_organism_config(genome)
+            source_fasta = config.get('fasta_full_genome')
+            if source_fasta is None:
+                raise ValueError(f"No 'fasta_full_genome' configured for genome '{genome}'. "
+                               f"Set it in config or pass source_fasta explicitly.")
         
         # # Check if it's a directory with individual chromosome files
         # fasta_path = Path(fasta_path)

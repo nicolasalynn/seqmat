@@ -465,8 +465,10 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     # Save configuration
     config[organism] = config_paths
     save_config(config)
-    
+
+    from .config import CONFIG_FILE
     print(f"Successfully set up genomics data for {organism} in {basepath}")
+    print(f"Configuration saved to: {CONFIG_FILE}")
     print("You can now use Gene.from_file() to load gene data.")
 
 

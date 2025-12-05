@@ -434,6 +434,9 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
     fasta_build_path = base_path / dir_config['chromosomes']
     fasta_build_path.mkdir(exist_ok=True)
     split_fasta(files['fasta_file'], fasta_build_path, skip_existing=pickup)
+
+    # Store the full genome FASTA path in config
+    config_paths['fasta_full_genome'] = str(files['fasta_file'])
     
     # Process annotations
     ensembl_annotation_path = base_path / 'annotations'
@@ -457,16 +460,21 @@ def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bo
         Path(config_paths[path_key]).mkdir(parents=True, exist_ok=True)
     
     # Clean up downloaded files (only if not in pickup mode)
+    # Keep the full genome FASTA file for SeqMat.from_fasta()
     if not pickup:
-        for file_path in files.values():
+        for key, file_path in files.items():
+            if key == 'fasta_file':
+                continue  # Keep full genome FASTA
             if file_path and file_path.exists():
                 file_path.unlink()
     
     # Save configuration
     config[organism] = config_paths
     save_config(config)
-    
+
+    from .config import CONFIG_FILE
     print(f"Successfully set up genomics data for {organism} in {basepath}")
+    print(f"Configuration saved to: {CONFIG_FILE}")
     print("You can now use Gene.from_file() to load gene data.")
 
 
@@ -1137,3 +1145,43 @@ def generate_random_sequence(k=15_000):
     bases = ['A', 'C', 'G', 'T']
     seq = ''.join(random.choices(bases, k=k))
     return seq
+
+
+def available_genes(organism: str = 'hg38'):
+    """
+    Yield gene names (symbols) found in the protein_coding directory for an organism.
+
+    This is useful for quickly checking which genes have data files available
+    that can be loaded with Gene.from_file().
+
+    Args:
+        organism: Organism identifier (e.g., 'hg38', 'mm39')
+
+    Yields:
+        Gene symbols (e.g., 'KRAS', 'TP53', 'BRCA1')
+
+    Example:
+        >>> genes = list(available_genes('hg38'))
+        >>> 'KRAS' in genes
+        True
+        >>> for gene in available_genes():
+        ...     print(gene)
+    """
+    import os
+    from .config import get_organism_config
+
+    config = get_organism_config(organism)
+    mrna_path = config.get('MRNA_PATH')
+
+    if not mrna_path:
+        raise ValueError(f"MRNA_PATH not found in config for organism '{organism}'")
+
+    protein_coding_path = Path(mrna_path) / 'protein_coding'
+
+    if not protein_coding_path.exists():
+        raise ValueError(f"protein_coding directory not found at {protein_coding_path}")
+
+    for file in os.listdir(protein_coding_path):
+        if file.endswith('.pkl'):
+            gene = file.split('_')[-1].removesuffix('.pkl')
+            yield gene

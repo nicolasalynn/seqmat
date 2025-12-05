@@ -26,7 +26,8 @@ from .utils import (
     data_summary,
     print_data_summary,
     search_genes,
-    get_all_genes
+    get_all_genes,
+    available_genes
 )
 
 __all__ = [
@@ -48,5 +49,6 @@ __all__ = [
     "data_summary",
     "print_data_summary",
     "search_genes",
-    "get_all_genes"
+    "get_all_genes",
+    "available_genes"
 ]
