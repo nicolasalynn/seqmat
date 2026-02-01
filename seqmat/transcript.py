@@ -1,9 +1,11 @@
-"""Transcript class for representing RNA transcripts with genomic information"""
+"""Transcript: RNA transcript with exons, introns, splice sites, and optional protein translation."""
 from __future__ import annotations
-from typing import Any, Optional, Union, Dict, List, Tuple
-import numpy as np
+
 import copy
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
 
 try:
     from Bio.Seq import Seq
@@ -13,73 +15,36 @@ except ImportError:
 
 from .seqmat import SeqMat
 from .config import get_organism_config, get_default_organism
-from .utils import unload_pickle
 
 
 class Transcript:
-    """
-    Represents a transcript with associated genomic information such as exons, introns, and sequences.
-
-    Attributes include:
-    - transcript_start, transcript_end: Transcript boundaries
-    - rev: Whether transcript is on reverse strand
-    - chrm: Chromosome
-    - donors, acceptors: Splice sites
-    - cons_vector, cons_seq: Conservation data
-    - transcript_seq: Transcript sequence
-    - transcript_biotype: Type of transcript
-    - primary_transcript: Whether this is the primary transcript
-    - transcript_id: Unique identifier
-    - TIS, TTS: Translation initiation/termination sites (if protein-coding)
-    """
+    """Transcript with genomic boundaries, donors/acceptors, pre_mrna, mature_mrna, and optional ORF/protein."""
 
     def __init__(self, d: Dict[str, Any], organism: Optional[str] = None):
-        """
-        Initialize a Transcript object from a dictionary of attributes.
-
-        Args:
-            d: Dictionary containing transcript attributes and data
-            organism: Genome build or organism reference (e.g., 'hg38')
-
-        Raises:
-            AssertionError: If required attributes are missing
-        """
-        # Convert certain attributes to NumPy arrays for consistent processing
-        array_fields = {'acceptors', 'donors', 'cons_vector', 'rev'}
+        """Build Transcript from dict of attributes. Requires transcript_start, transcript_end, rev, chrm."""
+        array_fields = {"acceptors", "donors", "cons_vector", "rev"}
         for k, v in d.items():
             if k in array_fields and v is not None:
                 v = np.array(v)
             setattr(self, k, v)
 
-        self.organism: str = organism if organism is not None else get_default_organism()
-
-        # Required attributes to form a valid transcript object
-        required_attrs = ['transcript_start', 'transcript_end', 'rev', 'chrm']
+        self.organism = organism if organism is not None else get_default_organism()
+        required_attrs = ["transcript_start", "transcript_end", "rev", "chrm"]
         missing = [attr for attr in required_attrs if not hasattr(self, attr)]
         if missing:
             raise AssertionError(f"Transcript is missing required attributes: {missing}")
-
-        # Default fallback values for optional attributes
-        if not hasattr(self, 'donors') or self.donors is None:
+        if not hasattr(self, "donors") or self.donors is None:
             self.donors = np.array([])
-        if not hasattr(self, 'acceptors') or self.acceptors is None:
+        if not hasattr(self, "acceptors") or self.acceptors is None:
             self.acceptors = np.array([])
-        if not hasattr(self, 'cons_available'):
+        if not hasattr(self, "cons_available"):
             self.cons_available = False
-
-        # Determine if transcript is protein-coding
-        self.protein_coding: bool = hasattr(self, 'TIS') and hasattr(self, 'TTS')
-
-        # Calculate transcript boundaries
+        self.protein_coding = hasattr(self, "TIS") and hasattr(self, "TTS")
         self.transcript_upper = max(self.transcript_start, self.transcript_end)
         self.transcript_lower = min(self.transcript_start, self.transcript_end)
-
-        # Generate pre-mRNA sequence data
         self.generate_pre_mrna()
-
-        # If consensus data is available and ends with '*', adjust cons_vector and cons_seq
-        if self.cons_available and hasattr(self, 'cons_seq') and hasattr(self, 'cons_vector'):
-            if self.cons_seq.endswith('*') and len(self.cons_seq) == len(self.cons_vector):
+        if self.cons_available and hasattr(self, "cons_seq") and hasattr(self, "cons_vector"):
+            if self.cons_seq.endswith("*") and len(self.cons_seq) == len(self.cons_vector):
                 self.cons_vector = self.cons_vector[:-1]
                 self.cons_seq = self.cons_seq[:-1]
 

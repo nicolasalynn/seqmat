@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Command-line interface for SeqMat data management"""
+"""SeqMat CLI: setup, organisms, summary, biotypes, count, list, search, info, build-lmdb, test."""
 
 import argparse
 import sys
-from typing import Optional
 
+from .config import (
+    get_available_organisms,
+    get_default_organism,
+    get_data_dir,
+    get_organism_info as get_organism_config_info,
+)
+from .lmdb_store import build_lmdb
 from .utils import (
     setup_genomics_data,
     print_data_summary,
@@ -15,9 +21,8 @@ from .utils import (
     get_gene_list,
     search_genes,
     get_organism_info,
-    test_installation
+    test_installation,
 )
-from .config import get_available_organisms, get_default_organism, get_organism_info as get_organism_config_info, get_data_dir
 
 
 def cmd_setup(args):
@@ -36,20 +41,17 @@ def cmd_setup(args):
 
 
 def cmd_list_organisms(args):
-    """List available and supported organisms"""
+    """List supported/configured organisms."""
     print("🌍 Organism Support Status:")
     print("-" * 30)
-    
     supported = list_supported_organisms()
     configured = list_available_organisms()
-    
-    # Get organism names from config
     organism_names = {}
     for org in set(supported + configured):
         try:
             info = get_organism_config_info(org)
-            organism_names[org] = info.get('name', org)
-        except:
+            organism_names[org] = info.get("name", org)
+        except Exception:
             organism_names[org] = org
     
     for org in supported:
@@ -82,8 +84,6 @@ def cmd_biotypes(args):
     
     print(f"📊 Gene biotypes in {args.organism}:")
     print("-" * 30)
-    
-    # Get counts for each biotype
     counts = count_genes(args.organism)
     
     for biotype in biotypes:
@@ -172,6 +172,33 @@ def cmd_search(args):
         print(f"\n(Showing first {args.limit} results)")
 
 
+def cmd_build_lmdb(args):
+    """Build LMDB database from gene pickle files (requires pip install seqmat[lmdb])"""
+    try:
+        output = build_lmdb(
+            annotations_dir=args.annotations_dir,
+            output_path=args.output,
+            organism=args.organism,
+        )
+        if args.set_config:
+            from .config import load_config, save_config
+            config = load_config()
+            org = args.organism or get_default_organism()
+            if org in config and isinstance(config[org], dict):
+                config[org]["gene_lmdb_path"] = output
+            else:
+                config["gene_lmdb_path"] = output
+            save_config(config)
+            print(f"Config updated: gene_lmdb_path = {output}")
+    except ImportError as e:
+        print(f"LMDB not installed: {e}")
+        print("Install with: pip install seqmat[lmdb]")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error building LMDB: {e}")
+        sys.exit(1)
+
+
 def cmd_info(args):
     """Show detailed information about an organism"""
     if not args.organism:
@@ -186,8 +213,6 @@ def cmd_info(args):
     
     print(f"ℹ️  Detailed information for {args.organism}:")
     print("=" * 40)
-    
-    # Data availability
     data_avail = info.get("data_available", {})
     
     if "gene_counts" in data_avail:
@@ -212,21 +237,21 @@ def cmd_info(args):
         print(f"  {path_name}: {exists} {path_value}")
 
 
+def cmd_test(args):
+    """Run SeqMat installation tests."""
+    results = test_installation(args.organism, verbose=not args.quiet)
+    sys.exit(1 if results["tests_failed"] > 0 else 0)
+
+
 def main():
-    """Main CLI entry point"""
-    parser = argparse.ArgumentParser(
-        prog="seqmat",
-        description="SeqMat genomics data management CLI"
-    )
-    
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(prog="seqmat", description="SeqMat genomics data management CLI")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
-    
-    # Setup command
+
     setup_parser = subparsers.add_parser("setup", help="Set up genomics data")
     default_data_dir = str(get_data_dir())
     setup_parser.add_argument("--path", default=default_data_dir,
-                             help=f"Base path for data storage (default: {default_data_dir})")
-    # Get available organisms dynamically
+                              help=f"Base path for data storage (default: {default_data_dir})")
     available_organisms = get_available_organisms()
     default_organism = get_default_organism()
     setup_parser.add_argument("--organism", default=default_organism, choices=available_organisms,
@@ -234,76 +259,56 @@ def main():
     setup_parser.add_argument("--force", action="store_true", help="Force overwrite existing data")
     setup_parser.add_argument("--pickup", action="store_true", help="Resume interrupted setup, reuse existing downloaded files")
     setup_parser.set_defaults(func=cmd_setup)
-    
-    # List organisms command
+
     organisms_parser = subparsers.add_parser("organisms", help="List supported/configured organisms")
     organisms_parser.set_defaults(func=cmd_list_organisms)
-    
-    # Summary command
+
     summary_parser = subparsers.add_parser("summary", help="Show data summary")
     summary_parser.set_defaults(func=cmd_summary)
-    
-    # Biotypes command
+
     biotypes_parser = subparsers.add_parser("biotypes", help="List gene biotypes")
     biotypes_parser.add_argument("--organism", help="Organism to query")
     biotypes_parser.set_defaults(func=cmd_biotypes)
-    
-    # Count command
+
     count_parser = subparsers.add_parser("count", help="Count genes")
     count_parser.add_argument("--organism", help="Organism to query")
     count_parser.add_argument("--biotype", help="Specific biotype to count")
     count_parser.set_defaults(func=cmd_count)
-    
-    # List genes command
+
     list_parser = subparsers.add_parser("list", help="List genes")
     list_parser.add_argument("--organism", help="Organism to query")
     list_parser.add_argument("--biotype", help="Gene biotype")
     list_parser.add_argument("--limit", type=int, default=50, help="Maximum genes to show")
     list_parser.set_defaults(func=cmd_list_genes)
-    
-    # Search command
+
     search_parser = subparsers.add_parser("search", help="Search genes by name")
     search_parser.add_argument("--organism", help="Organism to search")
     search_parser.add_argument("--query", help="Gene name pattern to search")
     search_parser.add_argument("--biotype", help="Filter by biotype")
     search_parser.add_argument("--limit", type=int, default=20, help="Maximum results")
     search_parser.set_defaults(func=cmd_search)
-    
-    # Info command
+
     info_parser = subparsers.add_parser("info", help="Show organism information")
     info_parser.add_argument("--organism", help="Organism to query")
     info_parser.set_defaults(func=cmd_info)
-    
-    # Test command
+
+    lmdb_parser = subparsers.add_parser("build-lmdb", help="Build LMDB from gene pickle files (pip install seqmat[lmdb])")
+    lmdb_parser.add_argument("--organism", default=None, help="Organism (default from config)")
+    lmdb_parser.add_argument("--annotations-dir", default=None, help="Annotations dir (default from organism config)")
+    lmdb_parser.add_argument("--output", default=None, help="Output LMDB path (default: <annotations>/genes.lmdb)")
+    lmdb_parser.add_argument("--set-config", action="store_true", help="Update config to use new LMDB")
+    lmdb_parser.set_defaults(func=cmd_build_lmdb)
+
     test_parser = subparsers.add_parser("test", help="Test SeqMat installation and data setup")
     test_parser.add_argument("--organism", help="Organism to test (uses default if not specified)")
     test_parser.add_argument("--quiet", action="store_true", help="Suppress detailed output")
     test_parser.set_defaults(func=cmd_test)
-    
-    # Parse arguments
+
     args = parser.parse_args()
-    
     if not args.command:
         parser.print_help()
         sys.exit(1)
-    
-    # Execute command
     args.func(args)
-
-
-def cmd_test(args):
-    """Run comprehensive tests on SeqMat installation"""
-    organism = args.organism
-    verbose = not args.quiet
-    
-    # Run tests
-    results = test_installation(organism, verbose=verbose)
-    
-    # Exit with appropriate code
-    if results['tests_failed'] > 0:
-        sys.exit(1)
-    else:
-        sys.exit(0)
 
 
 if __name__ == "__main__":

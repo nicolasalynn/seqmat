@@ -1,11 +1,11 @@
-"""SeqMat - Lightning-fast genomic sequence matrix with mutation tracking"""
+"""SeqMat: genomic sequence matrix with mutation tracking, complement, slicing, and FASTA loading."""
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Union, Optional, Any, ClassVar
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,7 @@ Mutation = Tuple[int, str, str]
 
 
 def contains(array: Union[np.ndarray, List], value: Any) -> bool:
-    """Check if a value is contained in an array or list"""
+    """Return whether value is in array or list."""
     if isinstance(array, np.ndarray):
         return value in array
     return value in array
@@ -25,25 +25,13 @@ def contains(array: Union[np.ndarray, List], value: Any) -> bool:
 
 @dataclass(slots=True)
 class SeqMat:
-    """
-    Lightning-fast genomic sequence matrix with full mutation tracking,
-    slicing, reverse/complement operations, and optional FASTA instantiation.
+    """Sequence matrix with indices, mutations (SNP/ins/del), complement, slicing, remove_regions, from_fasta."""
 
-    Key features:
-      - SNPs, insertions, deletions with history and sub-indexing
-      - Vectorized complement & reverse-complement
-      - Intuitive slicing (__getitem__) returns SeqMat clones
-      - remove_regions() for excising intervals
-      - Classmethod from_fasta() to load any genome FASTA
-      - Per-base conservation and custom metadata support
-    """
     name: str = field(default="wild_type")
     version: str = field(default="1.0")
     source: str = field(default="Unknown")
     notes: dict = field(default_factory=dict)
-    
-    
-    # Under-the-hood storage
+
     seq_array: np.ndarray = field(init=False, repr=False)
     insertions: Dict[int, List[Tuple[int, str]]] = field(default_factory=lambda: defaultdict(list), init=False, repr=False)
     mutations: List[Dict[str, Any]] = field(default_factory=list, init=False, repr=False)
@@ -62,21 +50,16 @@ class SeqMat:
         version: str = '1.0',
         notes: Optional[dict] = None,
         rev: bool = False,
-        seq: Optional[str] = None,     # Alternative parameter name
+        seq: Optional[str] = None,
     ) -> None:
-        # Handle alternative parameter names
         if seq is not None and not nucleotides:
             nucleotides = seq
-            
-        # Metadata
         self.name = name
         self.version = version
         self.source = source or "Unknown"
         self.notes = notes or {}
         self.rev = rev
         self.predicted_splicing = None
-
-        # Tracking
         self.insertions = defaultdict(list)
         self.mutations = []
         self.mutated_positions = set()

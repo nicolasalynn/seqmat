@@ -89,28 +89,33 @@ class Gene:
         if organism is None:
             organism = get_default_organism()
         try:
+            from .lmdb_store import load_gene_from_lmdb
+            data = load_gene_from_lmdb(gene_name, organism)
+            if data is not None:
+                return cls(
+                    gene_name=data.get('gene_name'),
+                    gene_id=data.get('gene_id'),
+                    rev=data.get('rev'),
+                    chrm=data.get('chrm'),
+                    transcripts=data.get('transcripts', {}),
+                    organism=organism
+                )
+        except ImportError:
+            pass
+        try:
             config = get_organism_config(organism)
         except ValueError:
             print(f"Organism '{organism}' not configured. Run setup_genomics_data() first.")
             return None
-            
-        # Search through all biotype folders in the configured organism MRNA path
-        mrna_path = Path(config['MRNA_PATH'])
+        mrna_path = Path(config["MRNA_PATH"])
         gene_files = []
-        
-        # Look through all biotype subdirectories
         if mrna_path.exists():
             for biotype_dir in mrna_path.iterdir():
                 if biotype_dir.is_dir():
-                    # Search for gene files matching the name
-                    matching_files = list(biotype_dir.glob(f'*_{gene_name}.pkl'))
-                    gene_files.extend(matching_files)
-        
+                    gene_files.extend(biotype_dir.glob(f"*_{gene_name}.pkl"))
         if not gene_files:
             print(f"No files available for gene '{gene_name}'.")
             return None
-
-        # Load gene data from the first matching file
         data = unload_pickle(gene_files[0])
         
         return cls(
@@ -123,16 +128,9 @@ class Gene:
         )
 
     def splice_sites(self) -> Tuple[Counter, Counter]:
-        """
-        Aggregates splice sites (acceptors and donors) from all transcripts.
-
-        Returns:
-            tuple(Counter, Counter): A tuple of two Counters for acceptors and donors.
-        """
+        """Return (Counter of acceptors, Counter of donors) across all transcripts."""
         acceptors: List[Any] = []
         donors: List[Any] = []
-
-        # Collect acceptor and donor sites from each transcript
         for transcript in self.transcripts.values():
             acceptors.extend(transcript.get('acceptors', []))
             donors.extend(transcript.get('donors', []))
@@ -140,15 +138,7 @@ class Gene:
         return Counter(acceptors), Counter(donors)
 
     def transcript(self, tid: Optional[str] = None) -> Optional[Transcript]:
-        """
-        Retrieve a Transcript object by ID, or the primary transcript if no ID is given.
-
-        Args:
-            tid: Transcript ID. If None, returns primary transcript.
-
-        Returns:
-            The Transcript object with the given ID or the primary transcript.
-        """
+        """Return Transcript by ID, or primary transcript if tid is None."""
         if tid is None:
             tid = self.primary_transcript
             
@@ -159,30 +149,17 @@ class Gene:
 
     @property
     def primary_transcript(self) -> Optional[str]:
-        """
-        Returns the primary transcript ID for this gene.
-        
-        Returns:
-            The primary transcript ID or None if not available.
-        """
-        # If already calculated, return it
-        if hasattr(self, '_primary_transcript'):
+        """Primary transcript ID, or first protein-coding transcript, or None."""
+        if hasattr(self, "_primary_transcript"):
             return self._primary_transcript
-
-        # Try to find a primary transcript
-        primary_transcripts = [k for k, v in self.transcripts.items() 
-                             if v.get('primary_transcript')]
-        if primary_transcripts:
-            self._primary_transcript = primary_transcripts[0]
+        primary = [k for k, v in self.transcripts.items() if v.get("primary_transcript")]
+        if primary:
+            self._primary_transcript = primary[0]
             return self._primary_transcript
-
-        # Fallback: find a protein-coding transcript
-        protein_coding = [k for k, v in self.transcripts.items() 
-                        if v.get('transcript_biotype') == 'protein_coding']
+        protein_coding = [k for k, v in self.transcripts.items()
+                         if v.get("transcript_biotype") == "protein_coding"]
         if protein_coding:
             self._primary_transcript = protein_coding[0]
             return self._primary_transcript
-
-        # No primary or protein-coding transcript found
         self._primary_transcript = None
         return None

@@ -1,16 +1,14 @@
-"""Configuration management for SeqMat"""
-import os
+"""Configuration management for SeqMat."""
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+
 from platformdirs import user_config_dir, user_data_dir
 
-# Use XDG Base Directory specification
 DEFAULT_CONFIG_DIR = Path(user_config_dir("seqmat", appauthor=False))
 DEFAULT_DATA_DIR = Path(user_data_dir("seqmat", appauthor=False))
-CONFIG_FILE = DEFAULT_CONFIG_DIR / 'config.json'
+CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.json"
 
-# Default organism data sources - can be overridden in config
 DEFAULT_ORGANISM_DATA = {
     'hg38': {
         'name': 'Homo sapiens (Human)',
@@ -35,45 +33,47 @@ DEFAULT_SETTINGS = {
     'directory_structure': {
         'chromosomes': 'chromosomes',
         'annotations': 'annotations'
-    }
+    },
+    'gene_lmdb_path': None,
+    'gene_lmdb_local_staging': False,
 }
 
 def load_config() -> Dict[str, Any]:
-    """Load configuration from user's home directory"""
+    """Load config from CONFIG_FILE, merged with DEFAULT_SETTINGS."""
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, "r") as f:
             config = json.load(f)
-            # Merge with default settings
             merged_config = DEFAULT_SETTINGS.copy()
             merged_config.update(config)
             return merged_config
     return DEFAULT_SETTINGS.copy()
 
 def save_config(config: Dict[str, Any]) -> None:
-    """Save configuration to user's home directory"""
+    """Save config to CONFIG_FILE."""
     DEFAULT_CONFIG_DIR.mkdir(exist_ok=True)
-    with open(CONFIG_FILE, 'w') as f:
+    with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
 
 def get_default_organism() -> str:
-    """Get the default organism from config or fallback"""
+    """Return default organism from config."""
     config = load_config()
     return config.get('default_organism', DEFAULT_SETTINGS['default_organism'])
 
+NON_ORGANISM_KEYS = {"default_organism", "directory_structure", "gene_lmdb_path", "gene_lmdb_local_staging"}
+
+
 def get_available_organisms() -> List[str]:
-    """Get list of available organisms from config and defaults"""
+    """Return organism IDs from config and defaults (excludes settings keys)."""
     config = load_config()
-    configured_organisms = set(config.keys()) - {'default_organism', 'directory_structure'}
+    configured_organisms = set(config.keys()) - NON_ORGANISM_KEYS
     default_organisms = set(DEFAULT_ORGANISM_DATA.keys())
     return sorted(configured_organisms | default_organisms)
 
 def get_organism_info(organism: str) -> Dict[str, Any]:
-    """Get organism information including name and URLs"""
+    """Return organism metadata (name, URLs) from config or DEFAULT_ORGANISM_DATA."""
     config = load_config()
-    
     if organism in config and isinstance(config[organism], dict):
         org_config = config[organism]
-        # Merge with defaults if available
         if organism in DEFAULT_ORGANISM_DATA:
             default_data = DEFAULT_ORGANISM_DATA[organism].copy()
             default_data.update(org_config)
@@ -85,18 +85,13 @@ def get_organism_info(organism: str) -> Dict[str, Any]:
         raise ValueError(f"Organism '{organism}' not configured. Available: {get_available_organisms()}")
 
 def get_organism_config(organism: Optional[str] = None) -> Dict[str, Path]:
-    """Get configuration paths for a specific organism"""
+    """Return path config for an organism (BASE, CHROM_SOURCE, MRNA_PATH, etc.) as Paths."""
     if organism is None:
         organism = get_default_organism()
-        
     config = load_config()
     if organism not in config:
         raise ValueError(f"Organism '{organism}' not configured. Run setup_genomics_data() first.")
-    
-    # Convert string paths to Path objects
     org_config = config[organism]
-    
-    # Handle case where org_config might be a string instead of dict
     if isinstance(org_config, str):
         raise ValueError(f"Invalid configuration for organism '{organism}'. "
                         f"Expected dictionary but got string: {org_config}")
@@ -108,20 +103,15 @@ def get_organism_config(organism: Optional[str] = None) -> Dict[str, Path]:
     return {k: Path(v) for k, v in org_config.items() if isinstance(v, str)}
 
 def get_directory_config() -> Dict[str, str]:
-    """Get directory structure configuration"""
+    """Return directory_structure (e.g. chromosomes, annotations folder names)."""
     config = load_config()
     return config.get('directory_structure', DEFAULT_SETTINGS['directory_structure'])
 
 def get_data_dir() -> Path:
-    """
-    Get the data directory where genomic data files are stored.
-    Returns the user data directory following OS conventions.
-    """
+    """Return user data directory for seqmat (platformdirs)."""
     return DEFAULT_DATA_DIR
 
+
 def get_config_dir() -> Path:
-    """
-    Get the config directory where configuration files are stored.
-    Returns the user config directory following OS conventions.
-    """
+    """Return user config directory for seqmat (platformdirs)."""
     return DEFAULT_CONFIG_DIR
