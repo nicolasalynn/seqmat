@@ -400,8 +400,10 @@ class SeqMat:
             return
         i = idx[0]
         rbytes = np.array(list(ref), dtype='S1')
-        if not permissive and not np.array_equal(self.seq_array['ref'][i:i+len(rbytes)], rbytes):
-            raise ValueError(f"Ref mismatch @{pos}")
+        if not permissive and not np.array_equal(self.seq_array["ref"][i : i + len(rbytes)], rbytes):
+            raise ValueError(
+                f"Ref mismatch @{pos}. Use apply_mutations(..., permissive_ref=True) to skip reference validation."
+            )
         self.seq_array['nt'][i:i+len(rbytes)] = np.array(list(alt), dtype='S1')
         self.seq_array['mut_type'][i] = b'snp'
 
