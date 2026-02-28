@@ -5,7 +5,7 @@ A comprehensive Python library for genomic sequence analysis with full mutation 
 splicing analysis, and sequence manipulation.
 """
 
-__version__ = "0.1.56"
+__version__ = "0.1.57"
 __author__ = "Nicolas Lynn Vila"
 __email__ = "nicolasalynn@gmail.com"
 

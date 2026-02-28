@@ -45,11 +45,11 @@ def get_prebuilt_data_base_url() -> str:
     default pip-install downloads and build-from-sources conservation.
     Resolution: SEQMAT_PREBUILT_DATA_BASE_URL env > config prebuilt_data_base_url > default (new bucket).
     """
-    env = os.environ.get("SEQMAT_PREBUILT_DATA_BASE_URL", "").strip()
+    env = (os.environ.get("SEQMAT_PREBUILT_DATA_BASE_URL") or "").strip()
     if env:
         return env.rstrip("/")
     config = load_config()
-    url = config.get("prebuilt_data_base_url", "").strip()
+    url = (config.get("prebuilt_data_base_url") or "").strip()
     if url:
         return url.rstrip("/")
     return _PREBUILT_DATA_BASE_URL_DEFAULT.rstrip("/")
