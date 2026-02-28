@@ -35,8 +35,9 @@ DEFAULT_DATA_DIR = Path(user_data_dir("seqmat", appauthor=False))
 
 # S3 bucket for prebuilt data (genes.db, FASTA). Used by default for pip installs (no rebuild).
 # Layout: {base}/{organism}/genes.db, {organism}/{organism}.fa.gz, etc.
+# Bucket region is eu-north-1; use that endpoint to avoid 301 redirect (which returns XML body, not data).
 # Override via env SEQMAT_PREBUILT_DATA_BASE_URL or config key "prebuilt_data_base_url".
-_PREBUILT_DATA_BASE_URL_DEFAULT = "https://seqmat-prebuilt-public.s3.us-east-1.amazonaws.com"
+_PREBUILT_DATA_BASE_URL_DEFAULT = "https://seqmat-prebuilt-public.s3.eu-north-1.amazonaws.com"
 
 
 def get_prebuilt_data_base_url() -> str:

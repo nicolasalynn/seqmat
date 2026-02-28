@@ -584,6 +584,38 @@ class PrebuiltDataUnavailableError(Exception):
     """Raised when prebuilt data cannot be downloaded (e.g. 404). Use build-from-sources instead."""
 
 
+def _validate_prebuilt_file(
+    path: Path,
+    min_size: int,
+    kind: str,
+    url: str,
+    allow_fasta_header: bool = False,
+) -> None:
+    """Raise PrebuiltDataUnavailableError and remove file if it looks like an error page or is too small."""
+    size = path.stat().st_size
+    if size < min_size:
+        path.unlink()
+        raise PrebuiltDataUnavailableError(
+            f"Prebuilt {kind} from {url} is too small ({size} bytes). "
+            "The server may have returned an error page. Check the bucket URL, network, and permissions. "
+            "Alternatively run setup with --build-from-sources."
+        )
+    with open(path, "rb") as f:
+        head = f.read(64)
+    if head.startswith(b"<?") or head.startswith(b"<!") or b"<html" in head[:32].lower():
+        path.unlink()
+        raise PrebuiltDataUnavailableError(
+            f"Prebuilt {kind} from {url} looks like an HTML/XML error page, not data. "
+            "Check the bucket URL and permissions. Alternatively run setup with --build-from-sources."
+        )
+    if allow_fasta_header and not head.lstrip().startswith(b">"):
+        path.unlink()
+        raise PrebuiltDataUnavailableError(
+            f"Prebuilt {kind} from {url} does not look like a FASTA file. "
+            "Check the bucket. Alternatively run setup with --build-from-sources."
+        )
+
+
 def download_prebuilt_data(
     organism: str,
     base_path: Path,
@@ -630,11 +662,21 @@ def download_prebuilt_data(
             raise
 
     files["genes_db"] = _download_or_raise(genes_db_url, base_path, is_gz=False)
+    _validate_prebuilt_file(
+        files["genes_db"], min_size=100_000, kind="genes.db", url=genes_db_url
+    )
     # FASTA: try .fa.gz then decompress; if not gzip (e.g. S3 has plain .fa), use .fa
     fasta_plain_path = base_path / f"{organism}.fa"
     if skip_existing and fasta_plain_path.exists():
         print(f"✓ Uncompressed FASTA already exists: {fasta_plain_path.name}")
         files["fasta_file"] = fasta_plain_path
+        _validate_prebuilt_file(
+            files["fasta_file"],
+            min_size=1_000_000,
+            kind="FASTA",
+            url=f"{base_url}/{organism}/",
+            allow_fasta_header=True,
+        )
     else:
         try:
             files["fasta_file"] = _download_or_raise(fasta_gz_url, base_path, is_gz=True)
@@ -646,6 +688,13 @@ def download_prebuilt_data(
                 files["fasta_file"] = _download_or_raise(fasta_plain_url, base_path, is_gz=False)
             else:
                 raise
+    _validate_prebuilt_file(
+        files["fasta_file"],
+        min_size=1_000_000,
+        kind="FASTA",
+        url=f"{base_url}/{organism}/",
+        allow_fasta_header=True,
+    )
     files["cons_file"] = None  # Conservation only downloaded during build-from-sources
     return files
 
