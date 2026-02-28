@@ -44,7 +44,7 @@ class TestSeqMat:
         assert seq.seq == "ATTCG"
     
     def test_multiple_mutations(self):
-        """Test applying multiple mutations"""
+        """Test applying multiple mutations (SNP + insertion count as mutated positions; deletion marks valid=False)."""
         seq = SeqMat("ATCGATCGATCG")
         mutations = [
             (2, "T", "A"),      # SNP
@@ -53,7 +53,7 @@ class TestSeqMat:
         ]
         seq.apply_mutations(mutations)
         assert len(seq.mutations) == 3
-        assert len(seq.mutated_positions) >= 3
+        assert len(seq.mutated_positions) >= 2  # SNP and insertion positions; deletions are not in mutated_positions
     
     def test_complement(self):
         """Test complement operation"""
@@ -69,12 +69,13 @@ class TestSeqMat:
         assert seq.rev == True
     
     def test_slicing(self):
-        """Test sequence slicing"""
+        """Test sequence slicing by genomic range (clone uses inclusive end)."""
         seq = SeqMat("ATCGATCGATCG", indices=np.arange(100, 112))
         subseq = seq[103:107]
-        assert len(subseq) == 4
+        # clone(start, end) is inclusive: 103..107 -> 5 positions
+        assert len(subseq) == 5
         assert subseq.index[0] == 103
-        assert subseq.index[-1] == 106
+        assert subseq.index[-1] == 107
     
     def test_remove_regions(self):
         """Test removing regions from sequence"""

@@ -1,20 +1,30 @@
 """Utility functions for SeqMat package"""
+from __future__ import annotations
+
+import os
 import pickle
 import json
+import re
+import sqlite3
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
 import numpy as np
 from pathlib import Path
-from typing import Any, Union, List, Optional, Dict
-import pandas as pd
+from typing import TYPE_CHECKING, Any, Union, List, Optional, Dict, Tuple
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    import pandas as pd
+else:
+    def _get_pd():
+        import pandas as pd
+        return pd
 import requests
 import gzip
 import shutil
 
-try:
-    from gtfparse import read_gtf
-    GTFPARSE_AVAILABLE = True
-except ImportError:
-    GTFPARSE_AVAILABLE = False
+# GTF reading: we use a pandas-based reader so we don't depend on gtfparse (which pins pyarrow<14.1).
+# That allows seqmat to require pyarrow>=15 and NumPy 2.
 
 try:
     import polars as pl
@@ -22,7 +32,111 @@ try:
 except ImportError:
     POLARS_AVAILABLE = False
 
-from .config import save_config, load_config, get_default_organism, get_directory_config, get_available_organisms, DEFAULT_ORGANISM_DATA, get_organism_info, get_data_dir
+from .config import (
+    save_config,
+    load_config,
+    get_default_organism,
+    get_directory_config,
+    get_available_organisms,
+    DEFAULT_ORGANISM_DATA,
+    get_organism_info,
+    get_data_dir,
+    get_prebuilt_data_base_url,
+)
+
+# Columns needed for GTF processing (drop the rest to save memory). Missing cols handled in code.
+_GTF_COLS = [
+    'gene_id', 'transcript_id', 'feature', 'start', 'end', 'strand', 'seqname',
+    'gene_biotype', 'transcript_biotype', 'gene_name', 'tag', 'protein_id'
+]
+_FEATURE_FILTER = {'gene', 'transcript', 'exon', 'CDS'}
+
+_GTF_FIXED_COLS = ['seqname', 'source', 'feature', 'start', 'end', 'score', 'strand', 'frame', 'attributes']
+_GTF_ATTR_KEYS = ['gene_id', 'transcript_id', 'gene_name', 'gene_biotype', 'transcript_biotype', 'tag', 'protein_id']
+
+
+def _parse_gtf_attributes(attr_str: str) -> Dict[str, str]:
+    """Parse GTF attributes column (key "value"; key2 "value2"; ...) into a dict."""
+    out: Dict[str, str] = {}
+    if not isinstance(attr_str, str) or not attr_str.strip():
+        return out
+    for m in re.finditer(r'(\w+)\s+"([^"]*)"', attr_str):
+        out[m.group(1)] = m.group(2)
+    return out
+
+
+def _read_gtf_pandas(annotations_file: Union[Path, str]) -> "pd.DataFrame":
+    """Read a GTF file into a pandas DataFrame with columns needed for annotation processing.
+    Does not require gtfparse, so we can use pyarrow>=15 and NumPy 2.
+    """
+    pd = _get_pd()
+    path = Path(annotations_file)
+    df = pd.read_csv(
+        path,
+        sep='\t',
+        comment='#',
+        header=None,
+        names=_GTF_FIXED_COLS,
+        dtype={'seqname': str, 'source': str, 'feature': str, 'strand': str, 'frame': str, 'attributes': str},
+        on_bad_lines='warn',
+    )
+    # Parse attributes into columns
+    attr_rows = df['attributes'].map(_parse_gtf_attributes)
+    for key in _GTF_ATTR_KEYS:
+        df[key] = attr_rows.map(lambda d, k=key: d.get(k, ''))
+    df = df.drop(columns=['attributes'])
+    df['start'] = pd.to_numeric(df['start'], errors='coerce').astype('Int64')
+    df['end'] = pd.to_numeric(df['end'], errors='coerce').astype('Int64')
+    return df
+
+
+def _process_gene_chunk(args: Tuple[Any, Optional[Dict], Any]) -> List[Tuple[str, str, str, bytes]]:
+    """Process a subset of annotations (one chunk by gene_id). Returns list of (gene_name, gene_id, biotype, blob)."""
+    pd = _get_pd()
+    chunk_df, cons_data, gtex_df = args
+    if chunk_df.empty:
+        return []
+    out: List[Tuple[str, str, str, bytes]] = []
+    for gene_id, gene_df in chunk_df.groupby('gene_id'):
+        biotype = gene_df['gene_biotype'].unique().tolist()
+        chrm = gene_df['seqname'].unique().tolist()
+        strand = gene_df['strand'].unique().tolist()
+        gene_attribute = gene_df[gene_df['feature'] == 'gene']
+        if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1 or gene_attribute.empty:
+            continue
+        gene_attribute = gene_attribute.squeeze()
+        rev = gene_attribute['strand'] == '-'
+        chrm_str = str(gene_attribute['seqname']).replace('chr', '')
+        transcripts = {}
+        for transcript_id, transcript_df in gene_df.groupby('transcript_id'):
+            if transcript_id:
+                transcript_data = process_transcript(transcript_df, rev, chrm_str, cons_data)
+                if transcript_data:
+                    transcripts[transcript_id] = transcript_data
+        if not transcripts:
+            continue
+        tag = gene_attribute.get('tag')
+        tag_list = tag.split(',') if pd.notna(tag) and isinstance(tag, str) else []
+        gene_data = {
+            'gene_name': gene_attribute['gene_name'],
+            'chrm': chrm_str,
+            'gene_id': gene_attribute['gene_id'],
+            'gene_start': int(gene_attribute['start']),
+            'gene_end': int(gene_attribute['end']),
+            'rev': rev,
+            'tag': tag_list,
+            'biotype': gene_attribute['gene_biotype'],
+            'transcripts': transcripts,
+            'tissue_expression': {},
+        }
+        try:
+            if gtex_df is not None and not gtex_df.empty and gene_id in gtex_df.index:
+                tissue_expr = gtex_df.loc[gene_id]
+                gene_data['tissue_expression'] = tissue_expr.squeeze().to_dict()
+        except Exception:
+            pass
+        out.append((gene_data['gene_name'], gene_data['gene_id'], gene_data['biotype'], pickle.dumps(gene_data)))
+    return out
 
 
 def dump_pickle(path: Union[str, Path], data: Any) -> None:
@@ -35,6 +149,50 @@ def unload_pickle(path: Union[str, Path]) -> Any:
     """Load data from a pickle file"""
     with open(path, 'rb') as f:
         return pickle.load(f)
+
+
+def load_conservation(path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Load conservation data from .db (SQLite) or .pkl.
+    Returns dict[transcript_id] -> {'scores': np.ndarray, 'seq': str/bytes}.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if path.suffix.lower() == ".db":
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT transcript_id, data FROM conservation")
+        out: Dict[str, Any] = {}
+        for row in cursor:
+            out[str(row["transcript_id"])] = pickle.loads(row["data"])
+        conn.close()
+        return out
+    data = unload_pickle(path)
+    if not isinstance(data, dict):
+        raise ValueError("Conservation pickle must be a dict[transcript_id] -> {scores, seq}")
+    return data
+
+
+def convert_conservation_pkl_to_db(pkl_path: Union[str, Path], db_path: Optional[Union[str, Path]] = None) -> Path:
+    """
+    Convert conservation.pkl to conservation.db (SQLite, same pattern as genes.db).
+    Returns path to the written .db file.
+    """
+    pkl_path = Path(pkl_path)
+    db_path = Path(db_path) if db_path is not None else pkl_path.with_suffix(".db")
+    if db_path.exists():
+        db_path.unlink()
+    data = unload_pickle(pkl_path)
+    if not isinstance(data, dict):
+        raise ValueError("Conservation pickle must be a dict[transcript_id] -> {scores, seq}")
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE conservation (transcript_id TEXT PRIMARY KEY, data BLOB)")
+    for transcript_id, blob in data.items():
+        conn.execute("INSERT INTO conservation (transcript_id, data) VALUES (?, ?)", (str(transcript_id), pickle.dumps(blob)))
+    conn.commit()
+    conn.close()
+    return db_path
 
 
 def dump_json(path: Union[str, Path], data: Any) -> None:
@@ -107,9 +265,10 @@ def download_and_ungzip(external_url: str, local_path: Path, skip_existing: bool
     return output_file
 
 
-def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
+def process_transcript(transcript_df: "pd.DataFrame", rev: bool, chrm: str,
                       cons_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Process transcript data from GTF dataframe."""
+    pd = _get_pd()
     if transcript_df.empty:
         return None
 
@@ -178,107 +337,141 @@ def process_transcript(transcript_df: pd.DataFrame, rev: bool, chrm: str,
     return data
 
 
-def retrieve_and_parse_ensembl_annotations(local_path: Path, annotations_file: Path, 
-                                         cons_data: Optional[Dict[str, Any]], 
-                                         gtex_file: Optional[Path] = None) -> None:
-    """Parse Ensembl GTF annotations and create gene data files."""
-    if not GTFPARSE_AVAILABLE:
-        raise ImportError("gtfparse is required for genomics data setup. Install with: pip install seqmat[genomics]")
-    
+def retrieve_and_parse_ensembl_annotations(
+    local_path: Path,
+    annotations_file: Path,
+    cons_data: Optional[Dict[str, Any]],
+    gtex_file: Optional[Path] = None,
+    n_jobs: int = 1,
+) -> None:
+    """Parse Ensembl GTF annotations and create genes.db. Use n_jobs > 1 to parallelize (faster)."""
+    pd = _get_pd()
+
     # Load GTEx expression data if available
     if gtex_file and gtex_file.exists():
         print("Loading GTEx expression data...")
         gtex_df = pd.read_csv(gtex_file, delimiter='\t', header=2)
-        # Use vectorized string operation instead of apply for better performance and stability
         gtex_df['Name'] = gtex_df['Name'].str.split('.').str[0]
         gtex_df = gtex_df.set_index('Name').drop(columns=['Description'])
     else:
         gtex_df = pd.DataFrame()
 
     print("Reading GTF annotations...")
-    annotations = read_gtf(annotations_file)
-    
-    # Convert Polars to Pandas immediately if needed
-    if POLARS_AVAILABLE and hasattr(annotations, '__module__') and 'polars' in annotations.__module__:
-        print("Converting Polars DataFrame to Pandas...")
-        annotations = annotations.to_pandas()
-    
-    print(f"Annotations shape: {annotations.shape}")
-    print(f"Available columns: {list(annotations.columns)}")
-    
-    # Check if required columns exist
+    annotations = _read_gtf_pandas(annotations_file)
+
     required_columns = ['gene_id', 'gene_biotype', 'seqname', 'strand', 'feature']
     missing_columns = [col for col in required_columns if col not in annotations.columns]
-    
     if missing_columns:
-        raise ValueError(f"GTF DataFrame is missing required columns: {missing_columns}. "
-                        f"Available columns: {list(annotations.columns)}")
-    
-    unique_genes = len(annotations['gene_id'].unique())
-    print(f"Processing {unique_genes} genes...")
-    
-    # Process genes using bracket notation for pandas compatibility
-    for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
-        # Use bracket notation for column access (pandas 2.0+ compatible)
-        biotype = gene_df['gene_biotype'].unique().tolist()
-        chrm = gene_df['seqname'].unique().tolist()
-        strand = gene_df['strand'].unique().tolist()
-        gene_attribute = gene_df[gene_df['feature'] == 'gene']
+        raise ValueError(f"GTF missing columns: {missing_columns}. Available: {list(annotations.columns)}")
 
-        if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1:
-            continue
+    # Pre-filter: keep only gene/transcript/exon/CDS and needed columns (speeds up groupby and iteration)
+    annotations = annotations[annotations['feature'].isin(_FEATURE_FILTER)]
+    keep_cols = [c for c in _GTF_COLS if c in annotations.columns]
+    annotations = annotations[keep_cols].copy()
+    print(f"Annotations shape after filter: {annotations.shape}")
 
-        biotype_path = local_path / biotype[0]
-        biotype_path.mkdir(exist_ok=True)
+    unique_genes = annotations['gene_id'].nunique()
+    print(f"Processing {unique_genes} genes (n_jobs={n_jobs})...")
 
-        if gene_attribute.empty:
-            continue
+    genes_db = local_path / 'genes.db'
+    if genes_db.exists():
+        genes_db.unlink()
+    conn = sqlite3.connect(str(genes_db))
+    conn.execute("CREATE TABLE genes (gene_name TEXT, gene_id TEXT, biotype TEXT, data BLOB)")
+    conn.execute("CREATE INDEX idx_genes_name ON genes(gene_name)")
+    conn.execute("CREATE INDEX idx_genes_id ON genes(gene_id)")
+    cursor = conn.cursor()
 
-        gene_attribute = gene_attribute.squeeze()
+    BATCH_SIZE = 2000
 
-        file_name = biotype_path / f'mrnas_{gene_id}_{gene_attribute["gene_name"].upper()}.pkl'
+    if n_jobs > 1:
+        # Parallel: split by gene_id, process chunks in worker processes
+        gene_ids = annotations['gene_id'].unique()
+        n_chunks = min(n_jobs, len(gene_ids))
+        chunk_size = (len(gene_ids) + n_chunks - 1) // n_chunks
+        chunks = [
+            annotations[annotations['gene_id'].isin(gene_ids[i * chunk_size:(i + 1) * chunk_size])]
+            for i in range(n_chunks)
+        ]
+        batch: List[Tuple[str, str, str, bytes]] = []
+        with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+            futures = {
+                pool.submit(_process_gene_chunk, (chunk, cons_data, gtex_df)): i
+                for i, chunk in enumerate(chunks)
+            }
+            for fut in tqdm(as_completed(futures), total=len(futures), desc="Genes"):
+                rows = fut.result()
+                batch.extend(rows)
+                if len(batch) >= BATCH_SIZE:
+                    cursor.executemany(
+                        "INSERT INTO genes (gene_name, gene_id, biotype, data) VALUES (?, ?, ?, ?)",
+                        batch,
+                    )
+                    conn.commit()
+                    batch.clear()
+        if batch:
+            cursor.executemany(
+                "INSERT INTO genes (gene_name, gene_id, biotype, data) VALUES (?, ?, ?, ?)",
+                batch,
+            )
+            conn.commit()
+    else:
+        # Serial path with batched INSERT
+        batch: List[Tuple[str, str, str, bytes]] = []
+        for gene_id, gene_df in tqdm(annotations.groupby('gene_id')):
+            biotype = gene_df['gene_biotype'].unique().tolist()
+            chrm = gene_df['seqname'].unique().tolist()
+            strand = gene_df['strand'].unique().tolist()
+            gene_attribute = gene_df[gene_df['feature'] == 'gene']
+            if len(biotype) != 1 or len(chrm) != 1 or len(strand) != 1 or len(gene_attribute) != 1 or gene_attribute.empty:
+                continue
+            gene_attribute = gene_attribute.squeeze()
+            rev = gene_attribute['strand'] == '-'
+            chrm_str = str(gene_attribute['seqname']).replace('chr', '')
+            transcripts = {}
+            for transcript_id, transcript_df in gene_df.groupby('transcript_id'):
+                if transcript_id:
+                    transcript_data = process_transcript(transcript_df, rev, chrm_str, cons_data)
+                    if transcript_data:
+                        transcripts[transcript_id] = transcript_data
+            if not transcripts:
+                continue
+            tag = gene_attribute.get('tag')
+            tag_list = tag.split(',') if pd.notna(tag) and isinstance(tag, str) else []
+            gene_data = {
+                'gene_name': gene_attribute['gene_name'],
+                'chrm': chrm_str,
+                'gene_id': gene_attribute['gene_id'],
+                'gene_start': int(gene_attribute['start']),
+                'gene_end': int(gene_attribute['end']),
+                'rev': rev,
+                'tag': tag_list,
+                'biotype': gene_attribute['gene_biotype'],
+                'transcripts': transcripts,
+                'tissue_expression': {},
+            }
+            try:
+                if not gtex_df.empty and gene_id in gtex_df.index:
+                    gene_data['tissue_expression'] = gtex_df.loc[gene_id].squeeze().to_dict()
+            except Exception:
+                pass
+            batch.append((gene_data['gene_name'], gene_data['gene_id'], gene_data['biotype'], pickle.dumps(gene_data)))
+            if len(batch) >= BATCH_SIZE:
+                cursor.executemany(
+                    "INSERT INTO genes (gene_name, gene_id, biotype, data) VALUES (?, ?, ?, ?)",
+                    batch,
+                )
+                conn.commit()
+                batch.clear()
+        if batch:
+            cursor.executemany(
+                "INSERT INTO genes (gene_name, gene_id, biotype, data) VALUES (?, ?, ?, ?)",
+                batch,
+            )
+            conn.commit()
 
-        if file_name.exists():
-            continue
-
-        rev = gene_attribute['strand'] == '-'
-        chrm = gene_attribute['seqname'].replace('chr', '')
-        
-        # Process all transcripts for this gene
-        transcripts = {}
-        for transcript_id, transcript_df in gene_df.groupby('transcript_id'):
-            if transcript_id:
-                transcript_data = process_transcript(transcript_df, rev, chrm, cons_data)
-                if transcript_data:
-                    transcripts[transcript_id] = transcript_data
-
-        if not transcripts:
-            continue
-
-        # Build gene_data using bracket notation for pandas compatibility
-        gene_data = {
-            'gene_name': gene_attribute['gene_name'],
-            'chrm': chrm,
-            'gene_id': gene_attribute['gene_id'],
-            'gene_start': int(gene_attribute['start']),
-            'gene_end': int(gene_attribute['end']),
-            'rev': rev,
-            'tag': gene_attribute['tag'].split(',') if 'tag' in gene_attribute and pd.notna(gene_attribute['tag']) else [],
-            'biotype': gene_attribute['gene_biotype'],
-            'transcripts': transcripts,
-            'tissue_expression': {},
-        }
-        
-        # Handle tissue expression
-        try:
-            if not gtex_df.empty and gene_id in gtex_df.index:
-                tissue_expr = gtex_df.loc[gene_id]
-                gene_data['tissue_expression'] = tissue_expr.squeeze().to_dict()
-        except Exception:
-            gene_data['tissue_expression'] = {}
-
-        dump_pickle(file_name, gene_data)
-
+    conn.close()
+    print(f"Wrote {genes_db}")
 
 def split_fasta(input_file: Path, output_directory: Path, skip_existing: bool = False) -> None:
     """Split a FASTA file into individual chromosome files."""
@@ -337,11 +530,10 @@ def download_genome_data(organism: str, base_path: Path, skip_existing: bool = F
     if not urls:
         raise ValueError(f"No URLs configured for organism {organism}")
     
-    # Map config URLs to expected keys
+    # Map config URLs to expected keys (conservation comes from prebuilt bucket below)
     url_mapping = {
         'fasta': 'fasta_url',
-        'gtf': 'ensembl_url', 
-        'conservation': 'cons_url',
+        'gtf': 'ensembl_url',
         'gtex': 'expression_url'
     }
     
@@ -362,11 +554,17 @@ def download_genome_data(organism: str, base_path: Path, skip_existing: bool = F
         raise ValueError(f"No GTF URL configured for organism {organism}")
     files['ensembl_file'] = download_and_ungzip(urls['ensembl_url'], base_path, skip_existing=skip_existing)
 
-    # Download conservation data if available
-    if urls.get('cons_url'):
-        files['cons_file'] = download(urls['cons_url'], base_path, skip_existing=skip_existing)
-    else:
-        files['cons_file'] = None
+    # Conservation: from prebuilt bucket (same as default download), optional
+    files['cons_file'] = None
+    base_url = get_prebuilt_data_base_url()
+    for ext in (".db", ".pkl"):
+        try:
+            files['cons_file'] = download(
+                f"{base_url}/{organism}/conservation{ext}", base_path, skip_existing=skip_existing
+            )
+            break
+        except Exception:
+            continue
     
     # Download expression data if available
     if urls.get('expression_url'):
@@ -382,99 +580,208 @@ def download_genome_data(organism: str, base_path: Path, skip_existing: bool = F
     return files
 
 
-def setup_genomics_data(basepath: str, organism: Optional[str] = None, force: bool = False, pickup: bool = False) -> None:
+class PrebuiltDataUnavailableError(Exception):
+    """Raised when prebuilt data cannot be downloaded (e.g. 404). Use build-from-sources instead."""
+
+
+def download_prebuilt_data(
+    organism: str,
+    base_path: Path,
+    skip_existing: bool = False,
+) -> Dict[str, Path]:
+    """
+    Download prebuilt genes.db and FASTA from the SeqMat S3 bucket.
+    Layout: {base}/{organism}/genes.db, {base}/{organism}/{organism}.fa.gz.
+    Optionally {base}/{organism}/conservation.db or conservation.pkl if present.
+    """
+    from .config import DEFAULT_ORGANISM_DATA
+
+    if organism not in DEFAULT_ORGANISM_DATA:
+        raise ValueError(
+            f"Organism {organism} not supported. Available: {list(DEFAULT_ORGANISM_DATA.keys())}"
+        )
+    base_path = Path(base_path)
+    base_path.mkdir(parents=True, exist_ok=True)
+    base_url = get_prebuilt_data_base_url()
+    genes_db_url = f"{base_url}/{organism}/genes.db"
+    fasta_gz_url = f"{base_url}/{organism}/{organism}.fa.gz"
+    files: Dict[str, Path] = {}
+
+    def _download_or_raise(url: str, dest_dir: Path, is_gz: bool = False) -> Path:
+        try:
+            if is_gz:
+                return download_and_ungzip(url, dest_dir, skip_existing=skip_existing)
+            return download(url, dest_dir, skip_existing=skip_existing)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                raise PrebuiltDataUnavailableError(
+                    f"Prebuilt data not found at {url}. "
+                    "Upload genes.db and FASTA to the S3 bucket, or run setup with "
+                    "--build-from-sources to generate data from GTF/FASTA sources."
+                ) from e
+            raise
+        except Exception as e:
+            if "404" in str(e).lower() or "not found" in str(e).lower():
+                raise PrebuiltDataUnavailableError(
+                    f"Prebuilt data not found for {organism}. "
+                    "Run setup with --build-from-sources to generate data from GTF/FASTA sources."
+                ) from e
+            raise
+
+    files["genes_db"] = _download_or_raise(genes_db_url, base_path, is_gz=False)
+    files["fasta_file"] = _download_or_raise(fasta_gz_url, base_path, is_gz=True)
+    files["cons_file"] = None
+    for ext in (".db", ".pkl"):
+        try:
+            files["cons_file"] = download(f"{base_url}/{organism}/conservation{ext}", base_path, skip_existing=skip_existing)
+            break
+        except Exception:
+            continue  # Conservation optional for prebuilt path
+    return files
+
+
+def _shell_config_path() -> Optional[Path]:
+    """Path to the user's shell config file (~/.zshrc or ~/.bashrc). Prefer zsh if SHELL contains zsh."""
+    home = Path.home()
+    shell = os.environ.get("SHELL", "")
+    if "zsh" in shell:
+        rc = home / ".zshrc"
+    else:
+        rc = home / ".bashrc"
+    if rc.exists():
+        return rc
+    # If preferred rc doesn't exist, try the other
+    other = home / ".zshrc" if rc.name == ".bashrc" else home / ".bashrc"
+    return other if other.exists() else rc
+
+
+def _append_seqmat_env_to_shell(data_root: Path, organism: str) -> None:
+    """Append SEQMAT_DATA_DIR and SEQMAT_DEFAULT_ORGANISM to the user's shell config if not already set."""
+    rc = _shell_config_path()
+    if not rc or not rc.is_file():
+        return
+    try:
+        text = rc.read_text()
+    except OSError:
+        return
+    if "SEQMAT_DATA_DIR" in text:
+        return
+    block = (
+        "\n# SeqMat config-less data root (added by seqmat setup)\n"
+        f"export SEQMAT_DATA_DIR=\"{data_root}\"\n"
+        f"export SEQMAT_DEFAULT_ORGANISM=\"{organism}\"\n"
+    )
+    try:
+        with open(rc, "a") as f:
+            f.write(block)
+        print(f"Added SEQMAT_DATA_DIR and SEQMAT_DEFAULT_ORGANISM to {rc}. Restart your shell or run: source {rc}")
+    except OSError:
+        pass
+
+
+def setup_genomics_data(
+    basepath: str,
+    organism: Optional[str] = None,
+    force: bool = False,
+    pickup: bool = False,
+    n_jobs: Optional[int] = None,
+    from_prebuilt: bool = True,
+) -> None:
     """
     Set up genomics data for a specific organism.
-    
+
+    By default downloads prebuilt genes.db and FASTA from the SeqMat S3 bucket.
+    Use from_prebuilt=False (or CLI --build-from-sources) to generate data from
+    GTF/FASTA sources instead.
+
     Args:
         basepath: Base directory for storing genomic data
         organism: Organism identifier ('hg38' or 'mm39')
         force: Force overwrite existing data
         pickup: Resume interrupted setup, reuse existing downloaded files
+        n_jobs: Number of parallel workers for GTF parsing (default: CPU count - 1). Use 1 for serial.
+        from_prebuilt: If True (default), download prebuilt genes.db and FASTA from S3.
+            If False, download GTF/FASTA from Ensembl/UCSC and build genes.db locally.
     """
     if organism is None:
         organism = get_default_organism()
     base_path = Path(basepath) / organism
-    
-    # Get configurable directory structure
-    dir_config = get_directory_config()
-    
-    # Define paths
+
+    # Define paths: single base path (no chromosomes/ or annotations/ subdirs unless needed)
     config_paths = {
-        'CHROM_SOURCE': str(base_path / dir_config['chromosomes']),
-        'MRNA_PATH': str(base_path / dir_config['annotations']),
+        'CHROM_SOURCE': str(base_path),
+        'MRNA_PATH': str(base_path),
         'MISSPLICING_PATH': str(base_path / 'missplicing'),
         'ONCOSPLICE_PATH': str(base_path / 'oncosplice'),
         'BASE': str(base_path),
         'TEMP': str(base_path / 'temp')
     }
-    
+
     # Load existing config
     config = load_config()
-    
+
     # Check if organism already configured
     if organism in config and not force and not pickup:
         print(f"Organism {organism} already configured. Use force=True to overwrite or pickup=True to resume.")
         return
-    
+
     # Check if directory exists
     if base_path.exists() and any(base_path.iterdir()) and not force and not pickup:
         print(f"Directory {base_path} not empty. Use force=True to overwrite or pickup=True to resume.")
         return
-    
+
     # Create directory structure
     print(f"Setting up genomics data in {base_path}")
     base_path.mkdir(parents=True, exist_ok=True)
-    
-    # Download all required files
-    print(f"Downloading data files for {organism}...")
-    files = download_genome_data(organism, base_path, skip_existing=pickup)
-    
-    # Process FASTA file
-    fasta_build_path = base_path / dir_config['chromosomes']
-    fasta_build_path.mkdir(exist_ok=True)
-    split_fasta(files['fasta_file'], fasta_build_path, skip_existing=pickup)
 
-    # Store the full genome FASTA path in config
-    config_paths['fasta_full_genome'] = str(files['fasta_file'])
-    
-    # Process annotations
-    ensembl_annotation_path = base_path / 'annotations'
-    ensembl_annotation_path.mkdir(exist_ok=True)
-    
-    # Load conservation data if available
-    cons_data = None
-    if files['cons_file'] is not None:
-        cons_data = unload_pickle(files['cons_file'])
-    
-    # Parse annotations
-    retrieve_and_parse_ensembl_annotations(
-        ensembl_annotation_path,
-        files['ensembl_file'],
-        cons_data,
-        gtex_file=files['gtex_file']
-    )
-    
+    if from_prebuilt:
+        # Default: download prebuilt genes.db and FASTA from S3
+        print(f"Downloading prebuilt data for {organism} from S3...")
+        try:
+            files = download_prebuilt_data(organism, base_path, skip_existing=pickup)
+        except PrebuiltDataUnavailableError as e:
+            print(str(e))
+            raise
+        config_paths['fasta_full_genome'] = str(files['fasta_file'])
+        config_paths['genes_db'] = str(files['genes_db'])
+    else:
+        # Build from sources: download GTF/FASTA, parse GTF → genes.db
+        print(f"Downloading source data and building genes.db for {organism}...")
+        files = download_genome_data(organism, base_path, skip_existing=pickup)
+        config_paths['fasta_full_genome'] = str(files['fasta_file'])
+        cons_data = None
+        if files['cons_file'] is not None:
+            cons_data = load_conservation(files['cons_file'])
+        annotation_jobs = n_jobs if n_jobs is not None else max(1, cpu_count() - 1)
+        retrieve_and_parse_ensembl_annotations(
+            base_path,
+            files['ensembl_file'],
+            cons_data,
+            gtex_file=files['gtex_file'],
+            n_jobs=annotation_jobs,
+        )
+        config_paths['genes_db'] = str(base_path / 'genes.db')
+        if not pickup:
+            for key, file_path in files.items():
+                if key == 'fasta_file':
+                    continue
+                if file_path and file_path.exists():
+                    file_path.unlink()
+
     # Create additional directories
     for path_key in ['MISSPLICING_PATH', 'ONCOSPLICE_PATH', 'TEMP']:
         Path(config_paths[path_key]).mkdir(parents=True, exist_ok=True)
-    
-    # Clean up downloaded files (only if not in pickup mode)
-    # Keep the full genome FASTA file for SeqMat.from_fasta()
-    if not pickup:
-        for key, file_path in files.items():
-            if key == 'fasta_file':
-                continue  # Keep full genome FASTA
-            if file_path and file_path.exists():
-                file_path.unlink()
-    
-    # Save configuration
-    config[organism] = config_paths
-    save_config(config)
 
-    from .config import CONFIG_FILE
+    # Save config file only when not using config-less mode (SEQMAT_DATA_DIR)
+    from .config import get_data_base, CONFIG_FILE
+    if get_data_base() is None:
+        config[organism] = config_paths
+        save_config(config)
+        print(f"Configuration saved to: {CONFIG_FILE}")
+    else:
+        print("SEQMAT_DATA_DIR is set; no config file written. Point it at this path to use the data.")
+    _append_seqmat_env_to_shell(Path(basepath).resolve(), organism)
     print(f"Successfully set up genomics data for {organism} in {basepath}")
-    print(f"Configuration saved to: {CONFIG_FILE}")
     print("You can now use Gene.from_file() to load gene data.")
 
 

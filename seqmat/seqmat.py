@@ -5,11 +5,13 @@ import copy
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 import pysam
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from .config import get_organism_config
 
@@ -37,7 +39,7 @@ class SeqMat:
     mutations: List[Dict[str, Any]] = field(default_factory=list, init=False, repr=False)
     mutated_positions: set[int] = field(default_factory=set, init=False, repr=False)
     rev: bool = field(default=False, init=False, repr=False)
-    predicted_splicing: Optional[pd.DataFrame] = field(default=None, init=False, repr=False)
+    predicted_splicing: Optional["pd.DataFrame"] = field(default=None, init=False, repr=False)
 
     def __init__(
         self,
@@ -141,22 +143,21 @@ class SeqMat:
         """
         if source_fasta is None:
             config = get_organism_config(genome)
-
-            # First try individual chromosome files from CHROM_SOURCE
-            chrom_source = config.get('CHROM_SOURCE')
-            if chrom_source:
-                chrom_path = Path(chrom_source)
-                # Try {chrom}.fasta naming convention
-                chrom_file = chrom_path / f"{chrom}.fasta"
-                if chrom_file.exists():
-                    source_fasta = chrom_file
-
-            # Fall back to full genome FASTA if no chromosome file found
+            # Prefer single full-genome FASTA (no per-chromosome split needed)
+            source_fasta = config.get('fasta_full_genome') or config.get('fasta')
             if source_fasta is None:
-                source_fasta = config.get('fasta_full_genome')
-                if source_fasta is None:
-                    raise ValueError(f"No chromosome files in CHROM_SOURCE or 'fasta_full_genome' configured for genome '{genome}'. "
-                                   f"Run setup_genomics_data() or set fasta path in config.")
+                # Fall back to per-chromosome files for backward compatibility
+                chrom_source = config.get('CHROM_SOURCE')
+                if chrom_source:
+                    chrom_path = Path(chrom_source)
+                    chrom_file = chrom_path / f"{chrom}.fasta"
+                    if chrom_file.exists():
+                        source_fasta = chrom_file
+            if source_fasta is None:
+                raise ValueError(
+                    f"No FASTA configured for genome '{genome}'. Set 'fasta_full_genome' or 'fasta' in config, "
+                    f"or provide per-chromosome files in CHROM_SOURCE. Run setup_genomics_data() or set_fasta_path()."
+                )
 
         fasta = pysam.FastaFile(str(source_fasta))
         seq = fasta.fetch(f'{chrom}', start-1, end).upper()
@@ -423,7 +424,9 @@ class SeqMat:
             e['valid'] = True
             entries.append(e)
         i = np.searchsorted(self.seq_array['index'], pos, 'right')
-        self.seq_array = np.concatenate([self.seq_array[:i], np.array(entries), self.seq_array[i:]])
+        # Explicit dtype for NumPy 2.x: list of np.void must be stacked with same dtype
+        entries_arr = np.array(entries, dtype=self.seq_array.dtype)
+        self.seq_array = np.concatenate([self.seq_array[:i], entries_arr, self.seq_array[i:]])
 
     def _delete(self, pos: int, ref: str) -> None:
         """Apply a deletion mutation."""

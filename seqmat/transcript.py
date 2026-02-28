@@ -196,14 +196,37 @@ class Transcript:
         upstream: int = 0,
         downstream: int = 0,
     ) -> Dict[str, Any]:
-        """Pre-mRNA sequence from FASTA. Optional upstream/downstream extend the region."""
+        """Pre-mRNA sequence from the single full-genome FASTA (e.g. hg38.fa). Optional upstream/downstream."""
         if fasta_path is None:
             config = get_organism_config(self.organism)
-            fasta_path = config["CHROM_SOURCE"] / f"chr{self.chrm}.fasta"
+            # Single full-genome FASTA only (no per-chromosome files in current setup)
+            fasta_path = config.get("fasta_full_genome") or config.get("fasta")
+            if fasta_path is None:
+                # Legacy: per-chromosome files under CHROM_SOURCE
+                fasta_path = config.get("CHROM_SOURCE") and (Path(config["CHROM_SOURCE"]) / f"chr{self.chrm}.fasta")
+            fasta_path = Path(fasta_path) if fasta_path else None
+            if not fasta_path or not fasta_path.exists():
+                raise ValueError(
+                    "No FASTA path in config (fasta_full_genome or fasta). "
+                    "Run setup_genomics_data() to install the full-genome FASTA (e.g. hg38.fa)."
+                )
+        # Full-genome FASTA: UCSC uses chr17, Ensembl sometimes 17 — try both
+        raw_chr = str(self.chrm).replace("chr", "") or "17"
+        with_chr = f"chr{raw_chr}"
+        contigs_to_try = [with_chr, raw_chr] if with_chr != raw_chr else [with_chr]
         start = max(1, self.transcript_lower - upstream)
         end = self.transcript_upper + downstream
-        seq_mat = SeqMat.from_fasta_file(fasta_path, f"chr{self.chrm}", start, end)
-        return {"seq": seq_mat.seq, "indices": seq_mat.index}
+        last_err = None
+        for contig in contigs_to_try:
+            try:
+                seq_mat = SeqMat.from_fasta_file(fasta_path, contig, start, end)
+                if len(seq_mat.seq) > 0:
+                    return {"seq": seq_mat.seq, "indices": seq_mat.index}
+            except Exception as e:
+                last_err = e
+        if last_err is not None:
+            raise last_err
+        raise ValueError(f"Could not fetch {self.chrm}:{start}-{end} from FASTA (tried contigs {contigs_to_try})")
 
     def generate_pre_mrna(
         self,

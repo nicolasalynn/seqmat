@@ -1,5 +1,8 @@
 """Tests for Gene class"""
+import pickle
+import sqlite3
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from seqmat import Gene
 
@@ -169,15 +172,9 @@ class TestGene:
         assert primary_id == "ENST2"  # Should pick protein-coding
     
     @patch('seqmat.gene.get_organism_config')
-    @patch('seqmat.gene.unload_pickle')
-    def test_from_file_success(self, mock_unload, mock_config):
-        """Test successful gene loading from file"""
-        # Mock configuration
-        mock_config.return_value = {
-            'MRNA_PATH': '/mock/path'
-        }
-        
-        # Mock file data
+    @patch('seqmat.lmdb_store.load_gene_from_lmdb', side_effect=ImportError)
+    def test_from_file_success(self, _mock_lmdb, mock_config, tmp_path):
+        """Test successful gene loading (pkl fallback when no genes_db)."""
         gene_data = {
             'gene_name': 'KRAS',
             'gene_id': 'ENSG00000133703',
@@ -185,30 +182,63 @@ class TestGene:
             'chrm': '12',
             'transcripts': {}
         }
-        mock_unload.return_value = gene_data
-        
-        # Mock file existence
-        with patch('pathlib.Path.glob') as mock_glob:
-            mock_glob.return_value = ['mock_file.pkl']
-            
-            gene = Gene.from_file('KRAS', 'hg38')
-            
-            assert gene is not None
-            assert gene.gene_name == 'KRAS'
-            assert gene.gene_id == 'ENSG00000133703'
-    
+        (tmp_path / 'protein_coding').mkdir()
+        pkl_path = tmp_path / 'protein_coding' / 'mrnas_ENSG00000133703_KRAS.pkl'
+        with open(pkl_path, 'wb') as f:
+            pickle.dump(gene_data, f)
+        mock_config.return_value = {'MRNA_PATH': str(tmp_path)}
+        gene = Gene.from_file('KRAS', 'hg38')
+        assert gene is not None
+        assert gene.gene_name == 'KRAS'
+        assert gene.gene_id == 'ENSG00000133703'
+
+    @patch('seqmat.sqlite_store.get_organism_config')
     @patch('seqmat.gene.get_organism_config')
-    def test_from_file_not_configured(self, mock_config):
-        """Test gene loading when organism not configured"""
-        mock_config.side_effect = ValueError("Organism not configured")
+    @patch('seqmat.lmdb_store.load_gene_from_lmdb', side_effect=ImportError)
+    def test_from_file_success_sqlite(self, _mock_lmdb, mock_gene_config, mock_sqlite_config, tmp_path):
+        """Test gene loading from genes.db when config has genes_db."""
+        gene_data = {
+            'gene_name': 'TP53',
+            'gene_id': 'ENSG00000141510',
+            'rev': False,
+            'chrm': '17',
+            'transcripts': {}
+        }
+        db_path = tmp_path / 'genes.db'
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE genes (gene_name TEXT, gene_id TEXT, biotype TEXT, data BLOB)"
+        )
+        conn.execute(
+            "INSERT INTO genes (gene_name, gene_id, biotype, data) VALUES (?, ?, ?, ?)",
+            (gene_data['gene_name'], gene_data['gene_id'], 'protein_coding', pickle.dumps(gene_data)),
+        )
+        conn.commit()
+        conn.close()
+        config = {'genes_db': str(db_path)}
+        mock_gene_config.return_value = config
+        mock_sqlite_config.return_value = config
+        gene = Gene.from_file('TP53', 'hg38')
+        assert gene is not None
+        assert gene.gene_name == 'TP53'
+        assert gene.gene_id == 'ENSG00000141510'
+    
+    @patch('seqmat.sqlite_store.get_organism_config')
+    @patch('seqmat.gene.get_organism_config')
+    def test_from_file_not_configured(self, mock_gene_config, mock_sqlite_config):
+        """Test gene loading when organism not configured (patch both gene and sqlite_store paths)."""
+        mock_gene_config.side_effect = ValueError("Organism not configured")
+        mock_sqlite_config.side_effect = ValueError("Organism not configured")
         
         gene = Gene.from_file('KRAS', 'hg38')
         assert gene is None
     
+    @patch('seqmat.sqlite_store.get_organism_config')
     @patch('seqmat.gene.get_organism_config')
-    def test_from_file_not_found(self, mock_config):
-        """Test gene loading when file not found"""
-        mock_config.return_value = {'MRNA_PATH': '/mock/path'}
+    def test_from_file_not_found(self, mock_gene_config, mock_sqlite_config):
+        """Test gene loading when file not found (no genes_db so pickle path is used, then no files)."""
+        mock_gene_config.return_value = {'MRNA_PATH': '/mock/path'}
+        mock_sqlite_config.return_value = {'MRNA_PATH': '/mock/path'}  # no genes_db
         
         with patch('pathlib.Path.glob') as mock_glob:
             mock_glob.return_value = []  # No files found

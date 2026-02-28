@@ -27,14 +27,19 @@ from .utils import (
 
 def cmd_setup(args):
     """Setup genomics data for an organism"""
+    from .utils import PrebuiltDataUnavailableError
     try:
         setup_genomics_data(
             basepath=args.path,
             organism=args.organism,
             force=args.force,
-            pickup=args.pickup
+            pickup=args.pickup,
+            from_prebuilt=not args.build_from_sources,
         )
         print(f"✅ Successfully set up {args.organism} data in {args.path}")
+    except PrebuiltDataUnavailableError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"❌ Error setting up data: {e}")
         sys.exit(1)
@@ -258,6 +263,11 @@ def main():
                              help=f"Organism to set up (default: {default_organism})")
     setup_parser.add_argument("--force", action="store_true", help="Force overwrite existing data")
     setup_parser.add_argument("--pickup", action="store_true", help="Resume interrupted setup, reuse existing downloaded files")
+    setup_parser.add_argument(
+        "--build-from-sources",
+        action="store_true",
+        help="Build genes.db from GTF/FASTA instead of downloading prebuilt data from S3",
+    )
     setup_parser.set_defaults(func=cmd_setup)
 
     organisms_parser = subparsers.add_parser("organisms", help="List supported/configured organisms")

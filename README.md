@@ -23,6 +23,14 @@ SeqMat is a comprehensive Python library for genomic sequence analysis, providin
 pip install seqmat
 ```
 
+After installing, to use genes and transcripts you need to fetch organism data once (see [Data Setup and Configuration](#data-setup-and-configuration)):
+
+```bash
+seqmat setup
+```
+
+This downloads prebuilt data (genes.db + FASTA) from SeqMat's S3 bucket into a dedicated directory on your machine. No config file is required: the installer can add `SEQMAT_DATA_DIR` to your shell config so SeqMat finds the data in future sessions.
+
 ### With Bioinformatics Features
 ```bash
 # For protein translation
@@ -131,8 +139,9 @@ print(f"Spliced:     {spliced.seq}")
 ```python
 from seqmat import Gene, setup_genomics_data
 
-# One-time setup (downloads reference data)
-setup_genomics_data("/path/to/data", organism="hg38")
+# One-time setup: downloads prebuilt genes.db + FASTA from SeqMat's S3 bucket (no rebuild)
+# Uses a dedicated data dir on your machine (default: platform user data dir)
+setup_genomics_data("/path/to/data", organism="hg38")  # or omit path to use default location
 
 # Load a gene
 kras = Gene.from_file("KRAS", organism="hg38")
@@ -189,34 +198,56 @@ genomic_seq.apply_mutations([
 
 ## Data Setup and Configuration
 
-SeqMat uses a flexible configuration system to manage organism data and file paths. This section explains how to set up data for existing organisms and add support for new ones.
+**Typical workflow:** `pip install seqmat` → run `seqmat setup` once (or `setup_genomics_data()` with optional path) → data is downloaded to a dedicated directory; SeqMat can add `SEQMAT_DATA_DIR` to your shell so future use is config-less. No manual config or rebuild needed.
+
+SeqMat uses a flexible configuration system. When `SEQMAT_DATA_DIR` is set, all paths are derived from it (config-less). Otherwise paths are read from a config file (written by setup if needed).
 
 ### Quick Setup for Supported Organisms
 
-For the built-in organisms (hg38, mm39), setup is straightforward:
+For ordinary **pip install** users, setup **downloads prebuilt data** (genes.db and FASTA) from the SeqMat S3 bucket into a dedicated location on your machine. **No rebuild is required.** Default data location is the platform user data dir (e.g. `~/Library/Application Support/seqmat` on macOS). For the built-in organisms (hg38, mm39):
 
 ```python
 from seqmat import setup_genomics_data
 
-# Download and setup human genome data
+# Default: download prebuilt genes.db + FASTA from S3 (fast)
 setup_genomics_data("/path/to/your/data", organism="hg38")
-
-# Download and setup mouse genome data  
 setup_genomics_data("/path/to/your/data", organism="mm39")
+
+# Optional: build from sources (GTF + FASTA) instead of using prebuilt data
+setup_genomics_data("/path/to/your/data", organism="hg38", from_prebuilt=False, n_jobs=8)
 ```
 
 Or via command line:
 ```bash
-# Setup human data
-i /path/to/your/data --organism hg38
+# Default: download prebuilt data from S3
+seqmat setup --path /path/to/your/data --organism hg38
 
-# Setup mouse data
-seqmat setup --path /path/to/your/data --organism mm39 --force
+# Build from GTF/FASTA sources instead
+seqmat setup --path /path/to/your/data --organism hg38 --build-from-sources
 ```
 
 ### Configuration System
 
-SeqMat stores configuration in `~/.seqmat/config.json`. This file contains:
+**Config-less mode (recommended):**  
+When you run `seqmat setup` (or `setup_genomics_data()`), SeqMat can append to your shell config (e.g. `.zshrc` or `.bashrc`):
+
+```bash
+export SEQMAT_DATA_DIR=/path/to/seqmat_base
+export SEQMAT_DEFAULT_ORGANISM=hg38
+```
+
+After you open a new terminal (or run `source ~/.zshrc`), SeqMat uses only these environment variables. All paths are derived: `{SEQMAT_DATA_DIR}/{organism}/genes.db`, `{organism}.fa`, etc. You do not need to create or edit any config file.
+
+**Config file mode** (when `SEQMAT_DATA_DIR` is not set):
+
+1. **`SEQMAT_CONFIG_FILE`** – exact path to config.json.
+2. **`SEQMAT_CONFIG_DIR`** – directory; config is `{SEQMAT_CONFIG_DIR}/config.json`.
+3. **Default** – platform config dir (e.g. `~/.config/seqmat/config.json` on Linux).
+
+To see which file is used: `from seqmat import get_config_file; print(get_config_file())`.  
+To see if config-less: `from seqmat import get_data_base; print(get_data_base())`.
+
+The config file (when used) contains:
 
 - **Organism paths**: Where each organism's data is stored
 - **Default organism**: Which organism to use when none specified
@@ -234,42 +265,40 @@ SeqMat stores configuration in `~/.seqmat/config.json`. This file contains:
   },
   "hg38": {
     "BASE": "/path/to/data/hg38",
-    "CHROM_SOURCE": "/path/to/data/hg38/chromosomes",
-    "MRNA_PATH": "/path/to/data/hg38/annotations",
-    "fasta": "/path/to/data/hg38/chromosomes"
+    "CHROM_SOURCE": "/path/to/data/hg38",
+    "MRNA_PATH": "/path/to/data/hg38",
+    "genes_db": "/path/to/data/hg38/genes.db",
+    "fasta_full_genome": "/path/to/data/hg38/hg38.fa"
   },
   "mm39": {
     "BASE": "/path/to/data/mm39",
-    "CHROM_SOURCE": "/path/to/data/mm39/chromosomes", 
-    "MRNA_PATH": "/path/to/data/mm39/annotations",
-    "fasta": "/path/to/data/mm39/chromosomes"
+    "CHROM_SOURCE": "/path/to/data/mm39",
+    "MRNA_PATH": "/path/to/data/mm39",
+    "genes_db": "/path/to/data/mm39/genes.db",
+    "fasta_full_genome": "/path/to/data/mm39/mm39.fa"
   }
 }
 ```
 
 ### Directory Structure
 
-When you run `setup_genomics_data`, it creates this directory structure:
+When you run `setup_genomics_data`, each organism directory contains a single **genes.db** (SQLite) and a full-genome FASTA:
 
 ```
 /your/data/path/
 ├── hg38/                          # Organism directory
-│   ├── chromosomes/               # FASTA files (configurable)
-│   │   ├── chr1.fasta
-│   │   ├── chr2.fasta
-│   │   └── ...
-│   ├── annotations/               # Gene/transcript data (configurable)
-│   │   ├── mrnas_ENSG00000133703_KRAS.pkl
-│   │   ├── mrnas_ENSG00000141510_TP53.pkl
-│   │   └── ...
-│   ├── temp/                      # Temporary download files
-│   ├── conservation.pkl           # Conservation scores
-│   └── gtex_expression.gct.gz     # Expression data (human only)
-└── mm39/                          # Mouse data (similar structure)
-    ├── chromosomes/
-    ├── annotations/
+│   ├── genes.db                   # Gene annotations (SQLite; from prebuilt or built from GTF)
+│   ├── hg38.fa                    # Full genome FASTA
+│   ├── temp/                      # Temporary files (when building from sources)
+│   ├── missplicing/
+│   └── oncosplice/
+└── mm39/                          # Mouse (same layout)
+    ├── genes.db
+    ├── mm39.fa
     └── ...
 ```
+
+Prebuilt data is downloaded from SeqMat's S3 bucket (default: `seqmat-prebuilt-public`). To upload or update prebuilt assets, use layout: `{bucket}/{organism}/genes.db`, `{bucket}/{organism}/{organism}.fa.gz`, and optionally `{bucket}/{organism}/conservation.db` or `conservation.pkl`.
 
 ### Adding Support for New Organisms
 
@@ -322,73 +351,44 @@ DEFAULT_ORGANISM_DATA = {
 
 #### Option 3: Manual Setup for Custom Data
 
-For completely custom data sources:
+For completely custom data: create the organism directory, place `genes.db` (SQLite, same schema as built by setup) and a full-genome FASTA (e.g. `custom.fa`), then point config at that directory:
 
 ```python
-# 1. Create directory structure manually
-import os
 from pathlib import Path
+from seqmat.config import load_config, save_config
 
 base_path = Path("/path/to/data/custom_genome")
-base_path.mkdir(exist_ok=True)
-(base_path / "chromosomes").mkdir(exist_ok=True)
-(base_path / "annotations").mkdir(exist_ok=True)
-
-# 2. Place your FASTA files in chromosomes/ directory
-# Your files: chr1.fasta, chr2.fasta, etc.
-
-# 3. Update configuration
-from seqmat.config import load_config, save_config
+base_path.mkdir(parents=True, exist_ok=True)
+# Place genes.db and e.g. custom_genome.fa in base_path, then:
 
 config = load_config()
 config['custom_genome'] = {
     'BASE': str(base_path),
-    'CHROM_SOURCE': str(base_path / 'chromosomes'),
-    'MRNA_PATH': str(base_path / 'annotations'),
-    'fasta': str(base_path / 'chromosomes')
+    'CHROM_SOURCE': str(base_path),
+    'MRNA_PATH': str(base_path),
+    'genes_db': str(base_path / 'genes.db'),
+    'fasta_full_genome': str(base_path / 'custom_genome.fa')
 }
 save_config(config)
-
-# 4. Process your GTF file (if you have gene annotations)
-from seqmat.utils import process_gtf_annotations
-process_gtf_annotations(
-    gtf_file="/path/to/your.gtf",
-    output_dir=str(base_path / 'annotations'),
-    organism="custom_genome"
-)
 ```
 
-### Data Sources and URLs
+### Data Sources
 
-SeqMat downloads data from these default sources:
+**Default (prebuilt download):**  
+SeqMat downloads prebuilt `genes.db` and FASTA from the SeqMat S3 bucket (default: `seqmat-prebuilt-public`). No rebuild; data is ready to use.
 
-**Human (hg38):**
-- FASTA: UCSC Genome Browser (latest hg38)
-- Annotations: Ensembl release-111 GTF
-- Conservation: Pre-computed conservation scores
-- Expression: GTEx v8 median TPM data
+**Build-from-sources** (when you pass `from_prebuilt=False` or `--build-from-sources`):
+- GTF: Ensembl (e.g. release-111 for hg38, release-112 for mm39)
+- FASTA: UCSC Genome Browser (hg38, mm39)
+- Conservation: same prebuilt bucket, per organism (`conservation.db` or `.pkl`)
+- Expression (human only): GTEx v8 median TPM data
 
-**Mouse (mm39):**
-- FASTA: UCSC Genome Browser (mm39)
-- Annotations: Ensembl release-112 GTF
+### Overriding the prebuilt data source
 
-### Customizing Directory Structure
+By default, prebuilt data is downloaded from SeqMat's S3 bucket. To use a different bucket or mirror, set one of:
 
-You can customize folder names by modifying the directory structure config:
-
-```python
-from seqmat.config import load_config, save_config
-
-config = load_config()
-config['directory_structure'] = {
-    'chromosomes': 'genomes',      # Custom name for FASTA directory
-    'annotations': 'gene_data'     # Custom name for annotation directory
-}
-save_config(config)
-
-# Future setups will use these custom names
-setup_genomics_data("/path/to/data", organism="hg38")
-```
+- **Environment:** `export SEQMAT_PREBUILT_DATA_BASE_URL=https://your-bucket.s3.region.amazonaws.com`
+- **Config file:** add `"prebuilt_data_base_url": "https://..."` to your seqmat config (see `get_config_file()`).
 
 ### Configuration Management
 
@@ -416,6 +416,13 @@ config['default_organism'] = 'mm39'  # Switch default to mouse
 save_config(config)
 ```
 
+### Rebuilding data from sources
+
+If you need to regenerate `genes.db` from a GTF (e.g. a different Ensembl release or custom annotations), use build-from-sources. This downloads the GTF and FASTA from Ensembl/UCSC, fetches conservation from the prebuilt bucket, parses the GTF, and writes `genes.db` locally.
+
+- **CLI:** `seqmat setup --path /path/to/data --organism hg38 --build-from-sources`
+- **Python:** `setup_genomics_data("/path/to/data", organism="hg38", from_prebuilt=False, n_jobs=8)`
+
 ### Troubleshooting Setup
 
 **Common issues:**
@@ -442,13 +449,16 @@ print("Paths:", config)
 ### Configuration Best Practices
 
 **For single-user systems:**
-- Use the default `~/.seqmat/config.json` location
+- Use the default location (see resolution order above) or set `SEQMAT_CONFIG_FILE` or `SEQMAT_CONFIG_DIR`.
 - Set up organisms as needed with `setup_genomics_data()`
 
 **For multi-user or shared systems:**
 - Create a shared data directory: `/shared/genomics_data/`
 - Point all users' configs to the same data paths
 - Consider using environment variables for paths
+
+**For ephemeral environments (e.g. Run.ai, Docker):**
+- Store `config.json` in persistent storage and point to it: `export SEQMAT_CONFIG_FILE=/path/to/config.json` or `export SEQMAT_CONFIG_DIR=/path/to/dir` (config will be `dir/config.json`).
 
 **For development/testing:**
 - Use separate config files or directories
@@ -466,11 +476,10 @@ with open('seqmat_config_template.json', 'w') as f:
     json.dump(config, f, indent=2)
 ```
 
-This setup downloads and organizes:
-- **Reference genome sequences** (FASTA) → `chromosomes/` directory
-- **Gene annotations** (GTF/processed) → `annotations/` directory  
-- **Conservation scores** → organism root directory
-- **Expression data** → organism root directory (human only)
+When building from sources, setup produces per organism:
+- **genes.db** (SQLite) in the organism directory
+- **Full-genome FASTA** (e.g. `hg38.fa`) in the organism directory
+- **Expression data** (human only) merged into gene records
 
 ## Data Inspection and Management
 
@@ -515,12 +524,14 @@ print_data_summary()  # Formatted overview of all data
 SeqMat provides a comprehensive CLI for data management. The CLI automatically detects available organisms from your configuration:
 
 ```bash
-# Install data for supported organisms
+# Default: download prebuilt data (no rebuild)
+seqmat setup
 seqmat setup --path /your/data/path --organism hg38
-seqmat setup --path /your/data/path --organism mm39 --force
 
-# The CLI will show all configured organisms as choices
-seqmat setup --help  # Shows: --organism {hg38,mm39,dm6,...}
+# Build from GTF/FASTA instead (for custom or updated annotations)
+seqmat setup --path /your/data/path --organism hg38 --build-from-sources
+
+seqmat setup --help  # Shows path default and --organism choices
 
 # Check what organisms are supported/configured
 seqmat organisms
@@ -611,13 +622,15 @@ $ seqmat summary
 ### Configuration Management
 
 **Core Functions:**
-- `load_config()`: Load configuration from `~/.seqmat/config.json`
+- `load_config()`: Load configuration (file path from `get_config_file()`)
+- `get_config_file()`: Return the active config file path
+- `get_data_base()`: Return `SEQMAT_DATA_DIR` path if set (config-less mode), else None
 - `save_config(config)`: Save configuration to file
-- `get_default_organism()`: Get default organism from config
-- `get_available_organisms()`: Get list of all configured organisms
+- `get_default_organism()`: Get default organism (from env in config-less mode, else config)
+- `get_available_organisms()`: Get list of configured organisms (from data dir in config-less mode)
 - `get_organism_config(organism=None)`: Get file paths for organism (uses default if None)
-- `get_organism_info(organism)`: Get organism metadata including URLs
-- `get_directory_config()`: Get customizable directory structure
+- `get_organism_info(organism)`: Get organism metadata
+- `get_prebuilt_data_base_url()`: Base URL for prebuilt downloads (env > config > default bucket)
 
 **Configuration Examples:**
 ```python
@@ -640,7 +653,7 @@ save_config(config)
 - `list_supported_organisms()`: Get all supported organisms (dynamic from config)
 - `list_available_organisms()`: Get configured organisms  
 - `get_organism_info(organism)`: Detailed organism information
-- `setup_genomics_data(basepath, organism=None, force=False)`: Download and setup data (uses default organism if None)
+- `setup_genomics_data(basepath, organism=None, force=False, pickup=False, n_jobs=None, from_prebuilt=True)`: Set up data. By default downloads prebuilt genes.db and FASTA from S3; use `from_prebuilt=False` to build from GTF/FASTA. `n_jobs` controls GTF parsing workers when building from sources.
 
 **Gene Discovery:**
 - `list_gene_biotypes(organism)`: Get available gene types
@@ -655,7 +668,7 @@ save_config(config)
 ### Command Line Interface
 
 **Setup Commands:**
-- `seqmat setup --path PATH --organism {dynamic_list} [--force]`: Organism choices automatically detected from config
+- `seqmat setup --path PATH --organism {dynamic_list} [--force] [--build-from-sources]`: Default: download prebuilt data from S3; use `--build-from-sources` to build genes.db from GTF/FASTA
 - `seqmat organisms`: List organism status and availability
 
 **Exploration Commands:**  
@@ -681,8 +694,8 @@ SeqMat is optimized for performance:
 ## Dependencies
 
 **Core (always required):**
-- numpy >= 1.20.0
-- pandas >= 1.3.0  
+- numpy >= 1.20.0, <3
+- pandas >= 2.2.0 (required for NumPy 2 compatibility)
 - pysam >= 0.19.0
 - requests >= 2.26.0
 - tqdm >= 4.62.0
@@ -690,6 +703,7 @@ SeqMat is optimized for performance:
 **Optional:**
 - biopython >= 1.79 (for protein translation)
 - gtfparse >= 1.2.0 (for genomics data setup)
+- pyarrow >= 14 (included; used for parquet export in `save_seqmat`)
 
 ## Examples
 

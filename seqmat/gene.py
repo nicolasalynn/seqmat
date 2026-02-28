@@ -78,11 +78,15 @@ class Gene:
     def from_file(cls, gene_name: str, organism: Optional[str] = None) -> Optional['Gene']:
         """
         Load gene data from file.
-        
+
+        Load order: LMDB (if installed) → SQLite (genes.db) → per-gene pickle files.
+        To use the DB, ensure genes.db exists in your organism data dir (run setup_genomics_data,
+        or set SEQMAT_DATA_DIR to a path whose organism subdirs contain genes.db).
+
         Args:
             gene_name: Name of the gene to load
             organism: Organism reference build
-            
+
         Returns:
             Gene object or None if not found
         """
@@ -91,6 +95,20 @@ class Gene:
         try:
             from .lmdb_store import load_gene_from_lmdb
             data = load_gene_from_lmdb(gene_name, organism)
+            if data is not None:
+                return cls(
+                    gene_name=data.get('gene_name'),
+                    gene_id=data.get('gene_id'),
+                    rev=data.get('rev'),
+                    chrm=data.get('chrm'),
+                    transcripts=data.get('transcripts', {}),
+                    organism=organism
+                )
+        except ImportError:
+            pass
+        try:
+            from .sqlite_store import load_gene_from_sqlite
+            data = load_gene_from_sqlite(gene_name, organism)
             if data is not None:
                 return cls(
                     gene_name=data.get('gene_name'),
