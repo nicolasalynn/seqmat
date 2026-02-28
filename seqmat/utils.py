@@ -592,7 +592,7 @@ def download_prebuilt_data(
     """
     Download prebuilt genes.db and FASTA from the SeqMat S3 bucket.
     Layout: {base}/{organism}/genes.db, {base}/{organism}/{organism}.fa.gz.
-    Optionally {base}/{organism}/conservation.db or conservation.pkl if present.
+    Conservation is not downloaded here; it is only fetched during build-from-sources.
     """
     from .config import DEFAULT_ORGANISM_DATA
 
@@ -605,6 +605,7 @@ def download_prebuilt_data(
     base_url = get_prebuilt_data_base_url()
     genes_db_url = f"{base_url}/{organism}/genes.db"
     fasta_gz_url = f"{base_url}/{organism}/{organism}.fa.gz"
+    fasta_plain_url = f"{base_url}/{organism}/{organism}.fa"
     files: Dict[str, Path] = {}
 
     def _download_or_raise(url: str, dest_dir: Path, is_gz: bool = False) -> Path:
@@ -629,14 +630,23 @@ def download_prebuilt_data(
             raise
 
     files["genes_db"] = _download_or_raise(genes_db_url, base_path, is_gz=False)
-    files["fasta_file"] = _download_or_raise(fasta_gz_url, base_path, is_gz=True)
-    files["cons_file"] = None
-    for ext in (".db", ".pkl"):
+    # FASTA: try .fa.gz then decompress; if not gzip (e.g. S3 has plain .fa), use .fa
+    fasta_plain_path = base_path / f"{organism}.fa"
+    if skip_existing and fasta_plain_path.exists():
+        print(f"✓ Uncompressed FASTA already exists: {fasta_plain_path.name}")
+        files["fasta_file"] = fasta_plain_path
+    else:
         try:
-            files["cons_file"] = download(f"{base_url}/{organism}/conservation{ext}", base_path, skip_existing=skip_existing)
-            break
-        except Exception:
-            continue  # Conservation optional for prebuilt path
+            files["fasta_file"] = _download_or_raise(fasta_gz_url, base_path, is_gz=True)
+        except OSError as e:
+            if "not a gzipped" in str(e).lower() or "bad gzip" in str(e).lower():
+                gz_path = base_path / f"{organism}.fa.gz"
+                if gz_path.exists():
+                    gz_path.unlink()
+                files["fasta_file"] = _download_or_raise(fasta_plain_url, base_path, is_gz=False)
+            else:
+                raise
+    files["cons_file"] = None  # Conservation only downloaded during build-from-sources
     return files
 
 
@@ -751,7 +761,10 @@ def setup_genomics_data(
         config_paths['fasta_full_genome'] = str(files['fasta_file'])
         cons_data = None
         if files['cons_file'] is not None:
-            cons_data = load_conservation(files['cons_file'])
+            try:
+                cons_data = load_conservation(files['cons_file'])
+            except Exception:
+                cons_data = None  # Invalid or empty conservation file; build without it
         annotation_jobs = n_jobs if n_jobs is not None else max(1, cpu_count() - 1)
         retrieve_and_parse_ensembl_annotations(
             base_path,
