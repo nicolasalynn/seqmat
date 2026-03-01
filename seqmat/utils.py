@@ -680,14 +680,22 @@ def download_prebuilt_data(
     else:
         try:
             files["fasta_file"] = _download_or_raise(fasta_gz_url, base_path, is_gz=True)
-        except OSError as e:
-            if "not a gzipped" in str(e).lower() or "bad gzip" in str(e).lower():
-                gz_path = base_path / f"{organism}.fa.gz"
-                if gz_path.exists():
-                    gz_path.unlink()
-                files["fasta_file"] = _download_or_raise(fasta_plain_url, base_path, is_gz=False)
-            else:
+        except (OSError, requests.HTTPError) as e:
+            # Fall back to plain .fa if .fa.gz is missing (404), forbidden (403), or not gzip
+            is_404_403 = (
+                isinstance(e, requests.HTTPError)
+                and e.response is not None
+                and e.response.status_code in (403, 404)
+            )
+            is_not_gzip = isinstance(e, OSError) and (
+                "not a gzipped" in str(e).lower() or "bad gzip" in str(e).lower()
+            )
+            if not (is_404_403 or is_not_gzip):
                 raise
+            gz_path = base_path / f"{organism}.fa.gz"
+            if gz_path.exists():
+                gz_path.unlink()
+            files["fasta_file"] = _download_or_raise(fasta_plain_url, base_path, is_gz=False)
     _validate_prebuilt_file(
         files["fasta_file"],
         min_size=1_000_000,
