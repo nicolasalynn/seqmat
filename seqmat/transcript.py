@@ -7,11 +7,32 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-try:
-    from Bio.Seq import Seq
-    BIOPYTHON_AVAILABLE = True
-except ImportError:
-    BIOPYTHON_AVAILABLE = False
+_CODON_TABLE = {
+    'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+    'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
+    'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+    'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+    'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+    'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+    'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+    'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+    'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+    'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+    'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+    'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+    'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+    'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+    'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+    'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G',
+}
+
+
+def _translate(seq: str) -> str:
+    """Translate a nucleotide sequence to protein using the standard codon table."""
+    seq = seq.upper()
+    # Trim to multiple of 3 (avoids partial-codon warnings)
+    trimmed = seq[:len(seq) - len(seq) % 3] if len(seq) % 3 else seq
+    return ''.join(_CODON_TABLE.get(trimmed[i:i+3], 'X') for i in range(0, len(trimmed), 3))
 
 from .seqmat import SeqMat
 from .config import get_organism_config, get_default_organism
@@ -309,14 +330,10 @@ class Transcript:
         if not self.protein_coding:
             return self if inplace else ""
 
-        if not BIOPYTHON_AVAILABLE:
-            print("BioPython not available. Cannot translate to protein.")
-            return self if inplace else ""
-
         # Translate the ORF to protein
         orf_seq = self.orf
         if isinstance(orf_seq, SeqMat):
-            protein = str(Seq(orf_seq.seq).translate()).strip('*')
+            protein = _translate(orf_seq.seq).strip('*')
         else:
             protein = ""
 
