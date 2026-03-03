@@ -190,6 +190,21 @@ class SeqMat:
         """Return the reference sequence as a string (only valid bases)."""
         return self.seq_array['ref'][self.seq_array['valid']].tobytes().decode()
 
+    def alignment(self) -> Tuple[str, str]:
+        """Return gapped reference and mutated sequences aligned to each other.
+
+        Deletions appear as '-' in the mutated string, insertions appear as '-'
+        in the reference string, and SNPs show the differing bases at the same
+        position.
+
+        Returns:
+            (reference, mutated) tuple of equal-length strings.
+        """
+        arr = self.seq_array
+        ref = arr['ref'].tobytes().decode()
+        mut = np.where(arr['valid'], arr['nt'], b'-').tobytes().decode()
+        return ref, mut
+
     @property
     def index(self) -> np.ndarray:
         """Return the genomic indices of valid bases."""
