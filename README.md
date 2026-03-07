@@ -31,18 +31,6 @@ seqmat setup
 
 This downloads prebuilt data (genes.db + FASTA) from SeqMat's S3 bucket into a dedicated directory on your machine. No config file is required: the installer can add `SEQMAT_DATA_DIR` to your shell config so SeqMat finds the data in future sessions.
 
-### With Bioinformatics Features
-```bash
-# For protein translation
-pip install seqmat[bio]
-
-# For GTF parsing and genomics data setup
-pip install seqmat[genomics]
-
-# Install everything
-pip install seqmat[all]
-```
-
 ### From Source
 ```bash
 git clone https://github.com/yourusername/seqmat.git
@@ -172,7 +160,7 @@ print(f"Introns: {len(transcript.introns)}")
 transcript.generate_mature_mrna()
 print(f"Mature mRNA length: {len(transcript.mature_mrna)} bp")
 
-# Generate protein (if protein-coding and BioPython available)
+# Generate protein (if protein-coding)
 if transcript.protein_coding:
     protein = transcript.generate_protein()
     print(f"Protein length: {len(transcript.protein)} aa")
@@ -615,7 +603,7 @@ $ seqmat summary
 
 - `generate_pre_mrna()`: Create pre-mRNA sequence
 - `generate_mature_mrna()`: Create spliced mRNA
-- `generate_protein()`: Translate to protein (requires BioPython)
+- `generate_protein()`: Translate to protein
 - `exons`/`introns`: Genomic coordinates
 - `protein_coding`: Boolean flag
 
@@ -701,7 +689,6 @@ SeqMat is optimized for performance:
 - tqdm >= 4.62.0
 
 **Optional:**
-- biopython >= 1.79 (for protein translation)
 - gtfparse >= 1.2.0 (for genomics data setup)
 - pyarrow >= 14 (included; used for parquet export in `save_seqmat`)
 
