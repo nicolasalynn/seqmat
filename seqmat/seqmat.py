@@ -18,6 +18,13 @@ from .config import get_organism_config
 
 Mutation = Tuple[int, str, str]
 
+# Byte lookup table for complement: A<->T, C<->G, everything else identity
+_COMPLEMENT_LUT = np.arange(256, dtype=np.uint8)
+_COMPLEMENT_LUT[ord('A')] = ord('T')
+_COMPLEMENT_LUT[ord('T')] = ord('A')
+_COMPLEMENT_LUT[ord('C')] = ord('G')
+_COMPLEMENT_LUT[ord('G')] = ord('C')
+
 
 @lru_cache(maxsize=8)
 def _fetch_fasta_region(fasta_path: str, chrom: str, start: int, end: int) -> str:
@@ -78,9 +85,9 @@ class SeqMat:
 
         # Prepare sequence
         if isinstance(nucleotides, str):
-            nts = np.array(list(nucleotides), dtype='S1')
+            nts = np.frombuffer(nucleotides.encode('ascii'), dtype='S1')
         else:
-            nts = np.array(nucleotides, dtype='S1')
+            nts = np.asarray(nucleotides, dtype='S1')
         L = len(nts)
 
         # Indices default to 1-based
@@ -125,7 +132,6 @@ class SeqMat:
         arr['mut_type'] = b''
         arr['valid'] = arr['nt'] != b'-'
         self.seq_array = arr
-        self._refresh_mutation_state()
 
     @classmethod
     def from_fasta(
@@ -489,77 +495,51 @@ class SeqMat:
             self.seq_array['valid'][mask] = False
             self.seq_array['mut_type'][mask] = b'del'
 
+    @staticmethod
+    def _complement_nt(nt_field: np.ndarray) -> np.ndarray:
+        """Complement nucleotide bytes via single-pass LUT (A<->T, C<->G)."""
+        return _COMPLEMENT_LUT[nt_field.view(np.uint8)].view('S1')
+
     def complement(self, copy: bool = False) -> SeqMat:
         """
         Complement the sequence (A<->T, C<->G) in-place or return a copy.
-        
+
         Args:
             copy: If True, return a new SeqMat object instead of modifying in-place
-            
+
         Returns:
             Self (for chaining) or new SeqMat if copy=True
         """
         if copy:
             new = self.clone()
             new._ensure_writable()
-            # Use a temporary placeholder to avoid double replacement
-            temp_array = new.seq_array['nt'].copy()
-            temp_array[new.seq_array['nt'] == b'A'] = b'T'
-            temp_array[new.seq_array['nt'] == b'T'] = b'A'
-            temp_array[new.seq_array['nt'] == b'C'] = b'G'
-            temp_array[new.seq_array['nt'] == b'G'] = b'C'
-            # N and - stay the same
-            new.seq_array['nt'] = temp_array
+            new.seq_array['nt'] = self._complement_nt(new.seq_array['nt'])
             return new
         else:
-            # In-place modification
             self._ensure_writable()
-            temp_array = self.seq_array['nt'].copy()
-            temp_array[self.seq_array['nt'] == b'A'] = b'T'
-            temp_array[self.seq_array['nt'] == b'T'] = b'A'
-            temp_array[self.seq_array['nt'] == b'C'] = b'G'
-            temp_array[self.seq_array['nt'] == b'G'] = b'C'
-            # N and - stay the same
-            self.seq_array['nt'] = temp_array
+            self.seq_array['nt'] = self._complement_nt(self.seq_array['nt'])
             return self
 
     def reverse_complement(self, copy: bool = False) -> SeqMat:
         """
         Reverse-complement the sequence in-place or return a copy.
-        
+
         Args:
             copy: If True, return a new SeqMat object instead of modifying in-place
-            
+
         Returns:
             Self (for chaining) or new SeqMat if copy=True
         """
         if copy:
             new = self.clone()
             new._ensure_writable()
-            # Apply complement mapping using temporary array
-            temp_array = new.seq_array['nt'].copy()
-            temp_array[new.seq_array['nt'] == b'A'] = b'T'
-            temp_array[new.seq_array['nt'] == b'T'] = b'A'
-            temp_array[new.seq_array['nt'] == b'C'] = b'G'
-            temp_array[new.seq_array['nt'] == b'G'] = b'C'
-            new.seq_array['nt'] = temp_array
-
-            # Reverse the sequence
+            new.seq_array['nt'] = self._complement_nt(new.seq_array['nt'])
             new.seq_array = new.seq_array[::-1].copy()
             new.rev = not new.rev
             return new
         else:
-            # In-place modification
             self._ensure_writable()
-            # Apply complement mapping in place using temporary array
-            temp_array = self.seq_array['nt'].copy()
-            temp_array[self.seq_array['nt'] == b'A'] = b'T'
-            temp_array[self.seq_array['nt'] == b'T'] = b'A'
-            temp_array[self.seq_array['nt'] == b'C'] = b'G'
-            temp_array[self.seq_array['nt'] == b'G'] = b'C'
-            self.seq_array['nt'] = temp_array
-            
-            # Reverse the sequence
+            self.seq_array['nt'] = self._complement_nt(self.seq_array['nt'])
             self.seq_array = self.seq_array[::-1].copy()
             self.rev = not self.rev
             return self
@@ -567,19 +547,36 @@ class SeqMat:
     def remove_regions(self, regions: List[Tuple[int, int]]) -> SeqMat:
         """
         Excise given genomic intervals (inclusive).
-        
+
         Args:
             regions: List of (start, end) tuples to remove
-            
+
         Returns:
             New SeqMat with regions removed
         """
         new = self.clone()
-        mask = np.ones(len(new.seq_array), bool)
+        indices = new.seq_array['index']
+        n = len(indices)
+        remove = np.zeros(n, dtype=bool)
+
+        # Detect monotonic order for searchsorted fast path
+        ascending = n < 2 or indices[0] <= indices[-1]
+        if ascending:
+            sorted_idx = indices
+        else:
+            sorted_idx = indices[::-1]  # view, no copy
+
         for lo, hi in regions:
-            mask &= ~((new.seq_array['index'] >= min(lo, hi)) & 
-                     (new.seq_array['index'] <= max(lo, hi)))
-        new.seq_array = new.seq_array[mask].copy()
+            lo, hi = min(lo, hi), max(lo, hi)
+            i = np.searchsorted(sorted_idx, lo)
+            j = np.searchsorted(sorted_idx, hi, side='right')
+            if ascending:
+                remove[i:j] = True
+            else:
+                # Map back to original order
+                remove[n - j:n - i] = True
+
+        new.seq_array = new.seq_array[~remove].copy()
         return new
 
     def summary(self) -> str:

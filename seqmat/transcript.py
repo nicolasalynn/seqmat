@@ -320,23 +320,10 @@ class Transcript:
             print("Cannot create protein without set TIS and TTS values.")
             return self
 
-        # Extract ORF region from mature mRNA
+        # Extract ORF region from mature mRNA via clone (no string re-parse)
         if hasattr(self, 'mature_mrna') and self.mature_mrna is not None:
-            # Find the positions in the mature mRNA
-            orf_start_idx = np.where(self.mature_mrna.index == self.TIS)[0]
-            orf_end_idx = np.where(self.mature_mrna.index == self.TTS)[0]
-            
-            if len(orf_start_idx) > 0 and len(orf_end_idx) > 0:
-                # Extract the subsequence using the found indices
-                start_idx = orf_start_idx[0]
-                end_idx = orf_end_idx[0] + 1  # +1 for inclusive end
-                
-                # Create new SeqMat with the ORF sequence
-                orf_seq = self.mature_mrna.seq[start_idx:end_idx]
-                orf_indices = self.mature_mrna.index[start_idx:end_idx]
-                
-                return SeqMat(orf_seq, indices=orf_indices)
-        
+            return self.mature_mrna.clone(self.TIS, self.TTS)
+
         return self
 
     def generate_protein(self, inplace: bool = True) -> Union['Transcript', str]:
