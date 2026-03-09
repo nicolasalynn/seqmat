@@ -29,14 +29,12 @@ _COMPLEMENT_LUT[ord('G')] = ord('C')
 @lru_cache(maxsize=8)
 def _fetch_fasta_region(fasta_path: str, chrom: str, start: int, end: int) -> str:
     """Cached FASTA region fetch. start is 1-based, end is inclusive."""
-    fasta = pysam.FastaFile(fasta_path)
-    return fasta.fetch(chrom, start - 1, end).upper()
+    with pysam.FastaFile(fasta_path) as fasta:
+        return fasta.fetch(chrom, start - 1, end).upper()
 
 
 def contains(array: Union[np.ndarray, List], value: Any) -> bool:
     """Return whether value is in array or list."""
-    if isinstance(array, np.ndarray):
-        return value in array
     return value in array
 
 

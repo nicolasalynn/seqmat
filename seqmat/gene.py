@@ -1,5 +1,4 @@
 """Gene class for representing genomic genes with associated transcripts"""
-import copy
 from typing import Any, Dict, List, Tuple, Optional, Iterator, Union
 from collections import Counter
 from pathlib import Path
@@ -53,14 +52,6 @@ class Gene:
     def __len__(self) -> int:
         """Returns the number of transcripts associated with this gene."""
         return len(self.transcripts)
-
-    def __copy__(self):
-        """Returns a shallow copy of the Gene object."""
-        return copy.copy(self)
-
-    def __deepcopy__(self, memo):
-        """Returns a deep copy of the Gene object."""
-        return copy.deepcopy(self, memo)
 
     def __iter__(self) -> Iterator[Transcript]:
         """Allow iteration over the gene's transcripts, yielding Transcript objects."""
