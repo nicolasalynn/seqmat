@@ -287,8 +287,9 @@ class SeqMat:
         new.mutations = copy.deepcopy(self.mutations)
         new.mutated_positions = set(self.mutated_positions)
         if start is not None or end is not None:
-            lo = start or self.index.min()
-            hi = end or self.index.max()
+            lo = start if start is not None else self.index.min()
+            hi = end if end is not None else self.index.max()
+            lo, hi = min(lo, hi), max(lo, hi)
             mask = (self.seq_array['index'] >= lo) & (self.seq_array['index'] <= hi)
             new.seq_array = self.seq_array[mask].copy()
             new._cow = False
