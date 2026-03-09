@@ -34,7 +34,7 @@ def _translate(seq: str) -> str:
     trimmed = seq[:len(seq) - len(seq) % 3] if len(seq) % 3 else seq
     return ''.join(_CODON_TABLE.get(trimmed[i:i+3], 'X') for i in range(0, len(trimmed), 3))
 
-from .seqmat import SeqMat
+from .seqmat import SeqMat, _fetch_fasta_region
 from .config import get_organism_config, get_default_organism
 
 
@@ -67,7 +67,7 @@ class Transcript:
         self.protein_coding = hasattr(self, "TIS") and hasattr(self, "TTS")
         self.transcript_upper = max(self.transcript_start, self.transcript_end)
         self.transcript_lower = min(self.transcript_start, self.transcript_end)
-        self.generate_pre_mrna()
+        self._pre_mrna = None
         if self.cons_available and hasattr(self, "cons_seq") and self._cons_vector is not None:
             if self.cons_seq.endswith("*") and len(self.cons_seq) == len(self._cons_vector):
                 self._cons_vector = self._cons_vector[:-1]
@@ -103,6 +103,17 @@ class Transcript:
     def clone(self) -> Transcript:
         """Returns a deep copy of this Transcript instance."""
         return copy.deepcopy(self)
+
+    @property
+    def pre_mrna(self) -> SeqMat:
+        """Pre-mRNA sequence. Lazy-loaded from FASTA on first access."""
+        if self._pre_mrna is None:
+            self.generate_pre_mrna()
+        return self._pre_mrna
+
+    @pre_mrna.setter
+    def pre_mrna(self, value: Optional[SeqMat]) -> None:
+        self._pre_mrna = value
 
     @property
     def cons_vector(self) -> np.ndarray:
@@ -211,6 +222,51 @@ class Transcript:
         """Return the indices covering exons in the transcript."""
         return np.concatenate([np.arange(a, b + 1) for a, b in self.exons_pos])
 
+    def _resolve_fasta_path(self, fasta_path: Optional[Path] = None) -> Tuple[Path, List[str]]:
+        """Resolve FASTA file path and contig names for this transcript."""
+        if fasta_path is None:
+            config = get_organism_config(self.organism)
+            fasta_path = config.get("fasta_full_genome") or config.get("fasta")
+            if fasta_path is None:
+                fasta_path = config.get("CHROM_SOURCE") and (Path(config["CHROM_SOURCE"]) / f"chr{self.chrm}.fasta")
+            fasta_path = Path(fasta_path) if fasta_path else None
+            if not fasta_path or not fasta_path.exists():
+                raise ValueError(
+                    "No FASTA path in config (fasta_full_genome or fasta). "
+                    "Run setup_genomics_data() to install the full-genome FASTA (e.g. hg38.fa)."
+                )
+        raw_chr = str(self.chrm).replace("chr", "") or "17"
+        with_chr = f"chr{raw_chr}"
+        contigs = [with_chr, raw_chr] if with_chr != raw_chr else [with_chr]
+        return Path(fasta_path), contigs
+
+    def _assemble_mature_from_fasta(self) -> SeqMat:
+        """Fetch exons directly from FASTA and assemble mature mRNA (skips pre-mRNA)."""
+        fasta_path, contigs = self._resolve_fasta_path()
+
+        # Sort exons by ascending genomic position
+        exon_intervals = sorted((min(a, b), max(a, b)) for a, b in self.exons)
+
+        last_err = None
+        for contig in contigs:
+            try:
+                seqs = []
+                all_indices = []
+                for lo, hi in exon_intervals:
+                    seq_str = _fetch_fasta_region(str(fasta_path), contig, lo, hi)
+                    seqs.append(seq_str)
+                    all_indices.append(np.arange(lo, hi + 1, dtype=np.int64))
+
+                mature = SeqMat(''.join(seqs), indices=np.concatenate(all_indices))
+                if self.rev:
+                    mature.reverse_complement()
+                return mature
+            except Exception as e:
+                last_err = e
+        if last_err is not None:
+            raise last_err
+        raise ValueError(f"Could not fetch exons from FASTA for {self.chrm}")
+
     def pull_pre_mrna_from_fasta(
         self,
         fasta_path: Optional[Path] = None,
@@ -220,23 +276,7 @@ class Transcript:
         region_end: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Pre-mRNA sequence from the single full-genome FASTA (e.g. hg38.fa). Optional upstream/downstream."""
-        if fasta_path is None:
-            config = get_organism_config(self.organism)
-            # Single full-genome FASTA only (no per-chromosome files in current setup)
-            fasta_path = config.get("fasta_full_genome") or config.get("fasta")
-            if fasta_path is None:
-                # Legacy: per-chromosome files under CHROM_SOURCE
-                fasta_path = config.get("CHROM_SOURCE") and (Path(config["CHROM_SOURCE"]) / f"chr{self.chrm}.fasta")
-            fasta_path = Path(fasta_path) if fasta_path else None
-            if not fasta_path or not fasta_path.exists():
-                raise ValueError(
-                    "No FASTA path in config (fasta_full_genome or fasta). "
-                    "Run setup_genomics_data() to install the full-genome FASTA (e.g. hg38.fa)."
-                )
-        # Full-genome FASTA: UCSC uses chr17, Ensembl sometimes 17 — try both
-        raw_chr = str(self.chrm).replace("chr", "") or "17"
-        with_chr = f"chr{raw_chr}"
-        contigs_to_try = [with_chr, raw_chr] if with_chr != raw_chr else [with_chr]
+        fasta_path, contigs_to_try = self._resolve_fasta_path(fasta_path)
         if region_start is not None or region_end is not None:
             start = region_start if region_start is not None else max(1, self.transcript_lower - upstream)
             end = region_end if region_end is not None else (self.transcript_upper + downstream)
@@ -294,6 +334,9 @@ class Transcript:
         """
         Generate the mature mRNA by concatenating exon regions from pre_mRNA.
 
+        When pre-mRNA has not been loaded yet, exons are fetched directly from
+        the indexed FASTA — skipping the full-gene read entirely.
+
         Args:
             inplace: If True, set self.mature_mrna, else return a new SeqMat
 
@@ -302,11 +345,21 @@ class Transcript:
         """
         self._fix_and_check_introns()
 
-        if inplace:
-            self.mature_mrna = self.pre_mrna.remove_regions(self.introns)
-            return self
+        if self._pre_mrna is not None:
+            # Pre-mRNA loaded (possibly mutated): splice from it
+            result = self.pre_mrna.remove_regions(self.introns)
+        else:
+            # Fast path: fetch exons directly, skip full-gene read
+            try:
+                result = self._assemble_mature_from_fasta()
+            except Exception:
+                # Fall back to full pre-mRNA load + splice
+                result = self.pre_mrna.remove_regions(self.introns)
 
-        return self.pre_mrna.remove_regions(self.introns)
+        if inplace:
+            self.mature_mrna = result
+            return self
+        return result
 
     @property
     def orf(self) -> Union[SeqMat, 'Transcript']:
