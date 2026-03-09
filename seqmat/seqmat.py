@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pysam
+from functools import lru_cache
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -16,6 +17,13 @@ if TYPE_CHECKING:
 from .config import get_organism_config
 
 Mutation = Tuple[int, str, str]
+
+
+@lru_cache(maxsize=8)
+def _fetch_fasta_region(fasta_path: str, chrom: str, start: int, end: int) -> str:
+    """Cached FASTA region fetch. start is 1-based, end is inclusive."""
+    fasta = pysam.FastaFile(fasta_path)
+    return fasta.fetch(chrom, start - 1, end).upper()
 
 
 def contains(array: Union[np.ndarray, List], value: Any) -> bool:
@@ -40,6 +48,7 @@ class SeqMat:
     mutated_positions: set[int] = field(default_factory=set, init=False, repr=False)
     rev: bool = field(default=False, init=False, repr=False)
     predicted_splicing: Optional["pd.DataFrame"] = field(default=None, init=False, repr=False)
+    _cow: bool = field(default=False, init=False, repr=False)
 
     def __init__(
         self,
@@ -62,6 +71,7 @@ class SeqMat:
         self.notes = notes or {}
         self.rev = rev
         self.predicted_splicing = None
+        self._cow = False
         self.insertions = defaultdict(list)
         self.mutations = []
         self.mutated_positions = set()
@@ -159,16 +169,14 @@ class SeqMat:
                     f"or provide per-chromosome files in CHROM_SOURCE. Run setup_genomics_data() or set_fasta_path()."
                 )
 
-        fasta = pysam.FastaFile(str(source_fasta))
-        seq = fasta.fetch(f'{chrom}', start-1, end).upper()
+        seq = _fetch_fasta_region(str(source_fasta), chrom, start, end)
         indices = np.arange(start, end+1, dtype=np.int64)
         return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", source=genome, **kwargs)
 
     @classmethod
     def from_fasta_file(cls, fasta_path: Union[str, Path], chrom: str, start: int, end: int, **kwargs) -> SeqMat:
         """Load a genomic interval directly from a FASTA file path"""
-        fasta = pysam.FastaFile(str(fasta_path))
-        seq = fasta.fetch(chrom, start-1, end).upper()
+        seq = _fetch_fasta_region(str(fasta_path), chrom, start, end)
         indices = np.arange(start, end+1, dtype=np.int64)
         return cls(nucleotides=seq, indices=indices, name=f"{chrom}:{start}-{end}", **kwargs)
 
@@ -220,6 +228,7 @@ class SeqMat:
 
     def _refresh_mutation_state(self) -> None:
         """Update mutation tracking based on current state."""
+        self._ensure_writable()
         # Clear
         self.seq_array['mut_type'] = b''
         self.mutated_positions.clear()
@@ -231,14 +240,38 @@ class SeqMat:
         for pos in self.insertions:
             self.mutated_positions.add(pos)
 
+    def _ensure_writable(self) -> None:
+        """Copy seq_array if it is shared via copy-on-write."""
+        if self._cow:
+            self.seq_array = self.seq_array.copy()
+            self._cow = False
+
+    def __deepcopy__(self, memo: dict) -> SeqMat:
+        """COW-aware deep copy — shares seq_array, copies on first write."""
+        new = object.__new__(type(self))
+        new.name = self.name
+        new.version = self.version
+        new.source = self.source
+        new.notes = copy.deepcopy(self.notes, memo)
+        new.rev = self.rev
+        new.predicted_splicing = copy.deepcopy(self.predicted_splicing, memo)
+        new.insertions = copy.deepcopy(self.insertions, memo)
+        new.mutations = copy.deepcopy(self.mutations, memo)
+        new.mutated_positions = set(self.mutated_positions)
+        # COW: share seq_array
+        new.seq_array = self.seq_array
+        new._cow = True
+        self._cow = True
+        return new
+
     def clone(self, start: Optional[int] = None, end: Optional[int] = None) -> SeqMat:
         """
         Create a copy of this SeqMat, optionally sliced to a specific range.
-        
+
         Args:
             start: Start position (genomic coordinate)
             end: End position (genomic coordinate)
-            
+
         Returns:
             A new SeqMat object
         """
@@ -252,8 +285,12 @@ class SeqMat:
             hi = end or self.index.max()
             mask = (self.seq_array['index'] >= lo) & (self.seq_array['index'] <= hi)
             new.seq_array = self.seq_array[mask].copy()
+            new._cow = False
         else:
-            new.seq_array = self.seq_array.copy()
+            # COW: share seq_array, copy on first write
+            new.seq_array = self.seq_array
+            new._cow = True
+            self._cow = True
         return new
 
     def __getitem__(
@@ -370,6 +407,8 @@ class SeqMat:
         if not self._validate_mutation_batch(mutations):
             return self
 
+        self._ensure_writable()
+
         # Track original strand state
         was_on_negative_strand = self.rev
         
@@ -462,6 +501,7 @@ class SeqMat:
         """
         if copy:
             new = self.clone()
+            new._ensure_writable()
             # Use a temporary placeholder to avoid double replacement
             temp_array = new.seq_array['nt'].copy()
             temp_array[new.seq_array['nt'] == b'A'] = b'T'
@@ -473,6 +513,7 @@ class SeqMat:
             return new
         else:
             # In-place modification
+            self._ensure_writable()
             temp_array = self.seq_array['nt'].copy()
             temp_array[self.seq_array['nt'] == b'A'] = b'T'
             temp_array[self.seq_array['nt'] == b'T'] = b'A'
@@ -494,6 +535,7 @@ class SeqMat:
         """
         if copy:
             new = self.clone()
+            new._ensure_writable()
             # Apply complement mapping using temporary array
             temp_array = new.seq_array['nt'].copy()
             temp_array[new.seq_array['nt'] == b'A'] = b'T'
@@ -501,13 +543,14 @@ class SeqMat:
             temp_array[new.seq_array['nt'] == b'C'] = b'G'
             temp_array[new.seq_array['nt'] == b'G'] = b'C'
             new.seq_array['nt'] = temp_array
-            
+
             # Reverse the sequence
             new.seq_array = new.seq_array[::-1].copy()
             new.rev = not new.rev
             return new
         else:
             # In-place modification
+            self._ensure_writable()
             # Apply complement mapping in place using temporary array
             temp_array = self.seq_array['nt'].copy()
             temp_array[self.seq_array['nt'] == b'A'] = b'T'
@@ -582,6 +625,7 @@ class SeqMat:
         the current nucleotides (nt) and reference info.
         This means the current sequence becomes the new baseline.
         """
+        self._ensure_writable()
         # Clear existing mutation annotations
         self.seq_array['ref'] = self.seq_array['nt']    # new reference = current nt
         self.seq_array['mut_type'] = b''                # clear mutation type
@@ -685,6 +729,7 @@ class SeqMat:
         obj.insertions = dl
         obj.mutations = list(mut_list) if isinstance(mut_list, (list, tuple)) else []
         obj.mutated_positions = mutated_positions
+        obj._cow = False
 
         # Keep slots that are not persisted explicitly in a clean state
         # (no additional refresh needed; seq_array already contains nt/ref/valid/mut_type)

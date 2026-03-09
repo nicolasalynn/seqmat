@@ -216,6 +216,8 @@ class Transcript:
         fasta_path: Optional[Path] = None,
         upstream: int = 0,
         downstream: int = 0,
+        region_start: Optional[int] = None,
+        region_end: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Pre-mRNA sequence from the single full-genome FASTA (e.g. hg38.fa). Optional upstream/downstream."""
         if fasta_path is None:
@@ -235,8 +237,12 @@ class Transcript:
         raw_chr = str(self.chrm).replace("chr", "") or "17"
         with_chr = f"chr{raw_chr}"
         contigs_to_try = [with_chr, raw_chr] if with_chr != raw_chr else [with_chr]
-        start = max(1, self.transcript_lower - upstream)
-        end = self.transcript_upper + downstream
+        if region_start is not None or region_end is not None:
+            start = region_start if region_start is not None else max(1, self.transcript_lower - upstream)
+            end = region_end if region_end is not None else (self.transcript_upper + downstream)
+        else:
+            start = max(1, self.transcript_lower - upstream)
+            end = self.transcript_upper + downstream
         last_err = None
         for contig in contigs_to_try:
             try:
@@ -253,15 +259,31 @@ class Transcript:
         self,
         upstream: int = 0,
         downstream: int = 0,
+        region_start: Optional[int] = None,
+        region_end: Optional[int] = None,
     ) -> "Transcript":
-        """Load pre-mRNA and set self.pre_mrna. Use upstream/downstream to add flanking (bp)."""
+        """Load pre-mRNA and set self.pre_mrna. Use upstream/downstream to add flanking (bp).
+
+        Optional region_start/region_end restrict the FASTA read to a genomic
+        sub-interval (e.g. ±7500 bp around a mutation site) instead of fetching
+        the entire transcript, which can be orders of magnitude faster for large
+        genes.
+        """
         try:
-            seq_data = self.pull_pre_mrna_from_fasta(upstream=upstream, downstream=downstream)
+            seq_data = self.pull_pre_mrna_from_fasta(
+                upstream=upstream, downstream=downstream,
+                region_start=region_start, region_end=region_end,
+            )
             pre_mrna = SeqMat(**seq_data)
         except Exception:
-            length = self.transcript_upper - self.transcript_lower + 1 + upstream + downstream
-            start = max(1, self.transcript_lower - upstream)
-            indices = np.arange(start, start + length)
+            if region_start is not None or region_end is not None:
+                lo = region_start if region_start is not None else max(1, self.transcript_lower - upstream)
+                hi = region_end if region_end is not None else (self.transcript_upper + downstream)
+            else:
+                lo = max(1, self.transcript_lower - upstream)
+                hi = self.transcript_upper + downstream
+            length = hi - lo + 1
+            indices = np.arange(lo, lo + length)
             pre_mrna = SeqMat("N" * length, indices=indices)
         if self.rev:
             pre_mrna.reverse_complement()
