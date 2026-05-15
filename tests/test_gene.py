@@ -239,9 +239,33 @@ class TestGene:
         """Test gene loading when file not found (no genes_db so pickle path is used, then no files)."""
         mock_gene_config.return_value = {'MRNA_PATH': '/mock/path'}
         mock_sqlite_config.return_value = {'MRNA_PATH': '/mock/path'}  # no genes_db
-        
+
         with patch('pathlib.Path.glob') as mock_glob:
             mock_glob.return_value = []  # No files found
-            
+
             gene = Gene.from_file('NONEXISTENT', 'hg38')
             assert gene is None
+
+    @patch('seqmat.sqlite_store.get_organism_config')
+    @patch('seqmat.gene.get_organism_config')
+    def test_get_raises_gene_not_found(self, mock_gene_config, mock_sqlite_config):
+        """Gene.get raises GeneNotFoundError when the gene is missing."""
+        from seqmat.errors import GeneNotFoundError
+        mock_gene_config.return_value = {'MRNA_PATH': '/mock/path'}
+        mock_sqlite_config.return_value = {'MRNA_PATH': '/mock/path'}
+
+        with patch('pathlib.Path.glob') as mock_glob:
+            mock_glob.return_value = []
+            with pytest.raises(GeneNotFoundError):
+                Gene.get('NONEXISTENT', 'hg38')
+
+    @patch('seqmat.sqlite_store.get_organism_config')
+    @patch('seqmat.gene.get_organism_config')
+    def test_get_raises_organism_not_configured(self, mock_gene_config, mock_sqlite_config):
+        """Gene.get raises OrganismNotConfiguredError when the organism has no config."""
+        from seqmat.errors import OrganismNotConfiguredError
+        mock_gene_config.side_effect = ValueError("not configured")
+        mock_sqlite_config.side_effect = ValueError("not configured")
+
+        with pytest.raises(OrganismNotConfiguredError):
+            Gene.get('KRAS', 'nope')

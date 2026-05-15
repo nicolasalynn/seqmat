@@ -1,7 +1,11 @@
-# SeqMat
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="SeqMat" width="540">
+</p>
 
 [![PyPI](https://img.shields.io/pypi/v/seqmat.svg)](https://pypi.org/project/seqmat/)
 [![Python](https://img.shields.io/pypi/pyversions/seqmat.svg)](https://pypi.org/project/seqmat/)
+[![Tests](https://github.com/nicolasalynn/seqmat/actions/workflows/test.yml/badge.svg)](https://github.com/nicolasalynn/seqmat/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/nicolasalynn/seqmat/branch/main/graph/badge.svg)](https://codecov.io/gh/nicolasalynn/seqmat)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Downloads](https://static.pepy.tech/badge/seqmat/month)](https://pepy.tech/project/seqmat)
 
@@ -26,6 +30,8 @@ seq = SeqMat("ATCGATCGATCG")
 seq.apply_mutations([(3, "C", "G"), (6, "-", "AAA"), (10, "TC", "-")])
 seq.mutations                                   # [(SNP, 3, C, G), (INS, 6, -, AAA), (DEL, 10, TC, -)]
 ```
+
+📘 **Walkthrough:** [Take a genomic coordinate through to the protein-level diff of a KRAS G12D oncogenic mutation](examples/kras_g12d_analysis.ipynb) — five cells, all the killer features.
 
 ---
 
@@ -78,7 +84,7 @@ from seqmat import Gene, gene_names_at_position
 
 Gene.from_position("12", 25_245_350)            # [Gene(KRAS)] — point query
 Gene.from_position("chr12", (25_200_000, 25_300_000))  # all overlapping genes in a range
-gene_names_at_position("X", 100_000)            # names only (no BLOB load) — ~17 us
+gene_names_at_position("X", 100_000)            # names only (no BLOB load) — ~2.5 us
 ```
 
 Backed by a per-chromosome sorted NumPy index persisted as a sidecar `gene_locations.npz` next to `genes.db`. Built lazily on first call; fresh `seqmat setup` builds also emit it for free.
@@ -92,17 +98,34 @@ seq.apply_mutations([(25398290, "G", "A")])     # G12D, the most famous KRAS var
 
 ## Performance
 
+### What SeqMat does in microseconds
+
 Numbers from an M-series Mac on hg38 (one core, warm caches):
 
-| Operation                              | Time     |
-| -------------------------------------- | -------: |
-| `gene_names_at_position(chrm, pos)`    | **17 µs** |
-| `Gene.from_file("KRAS")` (SQLite + unpickle) | 24 ms |
-| `Gene.from_position(chrm, pos)` end-to-end   | 24 ms |
-| KRAS mature mRNA assembly              | 0.2 ms |
-| 1,000-SNP batch on 4 kb sequence       | 19 ms |
+| Operation                                    | Time      |
+| -------------------------------------------- | --------: |
+| `gene_names_at_position(chrm, pos)`          | **2.5 µs** |
+| `Gene.from_file("KRAS")` (SQLite + unpickle) | 24 ms     |
+| `Gene.from_position(chrm, pos)` end-to-end   | 24 ms     |
+| KRAS mature mRNA assembly                    | 0.2 ms    |
+| 1,000-SNP batch on 4 kb sequence             | 19 ms    |
 
-The hot paths use NumPy structured arrays, LUT-based complement, `np.searchsorted` on sorted starts, FASTA range-scoped reads, and copy-on-write `clone()`. See `seqmat/seqmat.py` and `seqmat/locator.py`.
+### Position → gene, head-to-head
+
+Same 63,241 hg38 gene intervals, same 10,000 random point queries, same machine. Setup time (one-time index build) is reported separately from steady-state query time. Reproduce with `python benchmarks/bench_position_lookup.py`.
+
+| Implementation               | Setup    | Per query  | Relative   |
+| ---------------------------- | -------: | ---------: | ---------: |
+| **SeqMat**                   | 14 ms    | **2.5 µs** | **1×**     |
+| Python `dict` + `bisect`     | 9 ms     | 20 µs      | 8× slower  |
+| pandas (boolean mask)        | 19 ms    | 1.2 ms     | 500× slower |
+| PyRanges 0.1.x (`PyRanges.join`) | 255 ms | 2.0 ms   | 830× slower |
+
+> *Fair-comparison note:* PyRanges is built for whole-interval-set algebra, not single-point queries — its high per-query cost reflects the overhead of constructing a query `PyRanges` per call, which is what you do at a real call site. For batched set operations on intervals, PyRanges is the right tool; for "what gene is at this coordinate?", SeqMat's purpose-built sidecar index wins by a wide margin.
+
+### Why it's fast
+
+NumPy structured arrays, LUT-based complement, `np.searchsorted` on sorted exon and gene-start coordinates, FASTA range-scoped reads, and copy-on-write `clone()`. See [`seqmat/seqmat.py`](seqmat/seqmat.py) and [`seqmat/locator.py`](seqmat/locator.py).
 
 ## Command-line interface
 
@@ -141,8 +164,10 @@ from seqmat import (
 Key classes:
 
 - **`SeqMat`** — `apply_mutations`, `clone`, `complement`, `reverse_complement`, `remove_regions`, `from_fasta_file`
-- **`Gene`** — `from_file`, `from_position`, `transcript`, `splice_sites`, `primary_transcript`
+- **`Gene`** — `from_file`, `from_position`, `get`, `transcript`, `splice_sites`, `primary_transcript`
 - **`Transcript`** — `generate_pre_mrna`, `generate_mature_mrna`, `generate_protein`, `exons`, `introns`
+
+Full API reference: **[nicolasalynn.github.io/seqmat](https://nicolasalynn.github.io/seqmat/seqmat.html)** *(auto-generated from docstrings).*
 
 ## Requirements
 
@@ -150,7 +175,7 @@ Python ≥ 3.10. Core deps: `numpy`, `pandas`, `pyarrow`, `pysam`, `requests`, `
 
 ## Contributing
 
-PRs welcome. Run the test suite with `pytest tests/`. Benchmarks live under `tests/bench_*.py`.
+PRs welcome. Run the test suite with `pytest tests/`. Comparative benchmarks live under `benchmarks/`.
 
 ## License
 

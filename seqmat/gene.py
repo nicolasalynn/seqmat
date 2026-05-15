@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from ._io import unload_pickle
 from .config import get_default_organism, get_organism_config
+from .errors import GeneNotFoundError, OrganismNotConfiguredError
 from .locator import PosArg, gene_names_at_position
 from .transcript import Transcript
 
@@ -70,75 +71,80 @@ class Gene:
         return Transcript(self.transcripts[item], organism=self.organism)
 
     @classmethod
-    def from_file(cls, gene_name: str, organism: Optional[str] = None) -> Optional['Gene']:
+    def _load_dict(cls, gene_name: str, organism: str) -> Optional[Dict[str, Any]]:
+        """Load the raw gene dict from LMDB → SQLite → per-gene pickle, in that order.
+
+        Returns ``None`` when the gene isn't found in any backend.
         """
-        Load gene data from file.
-
-        Load order: LMDB (if installed) → SQLite (genes.db) → per-gene pickle files.
-        To use the DB, ensure genes.db exists in your organism data dir (run setup_genomics_data,
-        or set SEQMAT_DATA_DIR to a path whose organism subdirs contain genes.db).
-
-        Args:
-            gene_name: Name of the gene to load
-            organism: Organism reference build
-
-        Returns:
-            Gene object or None if not found
-        """
-        if organism is None:
-            organism = get_default_organism()
         try:
             from .lmdb_store import load_gene_from_lmdb
             data = load_gene_from_lmdb(gene_name, organism)
             if data is not None:
-                return cls(
-                    gene_name=data.get('gene_name'),
-                    gene_id=data.get('gene_id'),
-                    rev=data.get('rev'),
-                    chrm=data.get('chrm'),
-                    transcripts=data.get('transcripts', {}),
-                    organism=organism
-                )
+                return data
         except ImportError:
             pass
         try:
             from .sqlite_store import load_gene_from_sqlite
             data = load_gene_from_sqlite(gene_name, organism)
             if data is not None:
-                return cls(
-                    gene_name=data.get('gene_name'),
-                    gene_id=data.get('gene_id'),
-                    rev=data.get('rev'),
-                    chrm=data.get('chrm'),
-                    transcripts=data.get('transcripts', {}),
-                    organism=organism
-                )
+                return data
         except ImportError:
             pass
         try:
             config = get_organism_config(organism)
-        except ValueError:
-            _log.warning("Organism '%s' not configured. Run setup_genomics_data() first.", organism)
-            return None
+        except ValueError as exc:
+            raise OrganismNotConfiguredError(
+                f"Organism '{organism}' not configured. Run setup_genomics_data() first."
+            ) from exc
         mrna_path = Path(config["MRNA_PATH"])
-        gene_files = []
         if mrna_path.exists():
             for biotype_dir in mrna_path.iterdir():
                 if biotype_dir.is_dir():
-                    gene_files.extend(biotype_dir.glob(f"*_{gene_name}.pkl"))
-        if not gene_files:
-            _log.warning("No files available for gene '%s' (organism=%s).", gene_name, organism)
-            return None
-        data = unload_pickle(gene_files[0])
-        
+                    for pkl in biotype_dir.glob(f"*_{gene_name}.pkl"):
+                        return unload_pickle(pkl)
+        return None
+
+    @classmethod
+    def get(cls, gene_name: str, organism: Optional[str] = None) -> 'Gene':
+        """Load a gene, raising on failure.
+
+        Raises:
+            OrganismNotConfiguredError: when the organism has no data set up.
+            GeneNotFoundError: when the organism is configured but the gene is missing.
+        """
+        if organism is None:
+            organism = get_default_organism()
+        data = cls._load_dict(gene_name, organism)
+        if data is None:
+            raise GeneNotFoundError(
+                f"Gene '{gene_name}' not found in organism '{organism}'."
+            )
         return cls(
             gene_name=data.get('gene_name'),
             gene_id=data.get('gene_id'),
             rev=data.get('rev'),
             chrm=data.get('chrm'),
             transcripts=data.get('transcripts', {}),
-            organism=organism
+            organism=organism,
         )
+
+    @classmethod
+    def from_file(cls, gene_name: str, organism: Optional[str] = None) -> Optional['Gene']:
+        """Load a gene by name, returning ``None`` if not found.
+
+        Load order: LMDB (if installed) → SQLite (``genes.db``) → per-gene pickle files.
+        Prefer :meth:`get` if you'd rather have a typed exception than ``None``.
+        """
+        if organism is None:
+            organism = get_default_organism()
+        try:
+            return cls.get(gene_name, organism=organism)
+        except OrganismNotConfiguredError as exc:
+            _log.warning("%s", exc)
+            return None
+        except GeneNotFoundError as exc:
+            _log.warning("%s", exc)
+            return None
 
     @classmethod
     def from_position(

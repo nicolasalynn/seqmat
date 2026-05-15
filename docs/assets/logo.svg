@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img" aria-label="SeqMat logo">
+  <style>
+    .word { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-weight: 700; }
+    .tag { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; font-weight: 500; }
+    .word { fill: #1a1a1a; }
+    .tag { fill: #6a6a6a; }
+    .tile-text { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-weight: 700; fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .word { fill: #f5f5f5; }
+      .tag  { fill: #a0a0a0; }
+    }
+  </style>
+
+  <!-- Wordmark -->
+  <text class="word" x="40" y="98" font-size="84" letter-spacing="-2">SeqMat</text>
+
+  <!-- Tagline -->
+  <text class="tag" x="44" y="128" font-size="20">sequences as matrices, mutations as math</text>
+
+  <!-- Sequence track underneath -->
+  <g transform="translate(40,150)">
+    <!-- 12 tiles: A C G T A C G T A C G T -->
+    <g>
+      <rect x="0"   y="0" width="46" height="46" rx="6" fill="#44AF69"/>
+      <text class="tile-text" x="23" y="32" font-size="26" text-anchor="middle">A</text>
+
+      <rect x="52"  y="0" width="46" height="46" rx="6" fill="#4F86C6"/>
+      <text class="tile-text" x="75" y="32" font-size="26" text-anchor="middle">C</text>
+
+      <rect x="104" y="0" width="46" height="46" rx="6" fill="#F4A261"/>
+      <text class="tile-text" x="127" y="32" font-size="26" text-anchor="middle">G</text>
+
+      <rect x="156" y="0" width="46" height="46" rx="6" fill="#E76F51"/>
+      <text class="tile-text" x="179" y="32" font-size="26" text-anchor="middle">T</text>
+
+      <rect x="208" y="0" width="46" height="46" rx="6" fill="#44AF69"/>
+      <text class="tile-text" x="231" y="32" font-size="26" text-anchor="middle">A</text>
+
+      <rect x="260" y="0" width="46" height="46" rx="6" fill="#4F86C6"/>
+      <text class="tile-text" x="283" y="32" font-size="26" text-anchor="middle">C</text>
+
+      <rect x="312" y="0" width="46" height="46" rx="6" fill="#F4A261"/>
+      <text class="tile-text" x="335" y="32" font-size="26" text-anchor="middle">G</text>
+
+      <rect x="364" y="0" width="46" height="46" rx="6" fill="#E76F51"/>
+      <text class="tile-text" x="387" y="32" font-size="26" text-anchor="middle">T</text>
+
+      <rect x="416" y="0" width="46" height="46" rx="6" fill="#44AF69"/>
+      <text class="tile-text" x="439" y="32" font-size="26" text-anchor="middle">A</text>
+
+      <rect x="468" y="0" width="46" height="46" rx="6" fill="#4F86C6"/>
+      <text class="tile-text" x="491" y="32" font-size="26" text-anchor="middle">C</text>
+
+      <rect x="520" y="0" width="46" height="46" rx="6" fill="#F4A261"/>
+      <text class="tile-text" x="543" y="32" font-size="26" text-anchor="middle">G</text>
+
+      <!-- Last tile shows a mutation: T mutated to A. Outline + bold tint. -->
+      <rect x="572" y="0" width="46" height="46" rx="6" fill="#44AF69" stroke="#1a1a1a" stroke-width="3" stroke-dasharray="4 3"/>
+      <text class="tile-text" x="595" y="32" font-size="26" text-anchor="middle">A</text>
+    </g>
+  </g>
+</svg>
