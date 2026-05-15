@@ -9,9 +9,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Downloads](https://static.pepy.tech/badge/seqmat/month)](https://pepy.tech/project/seqmat)
 
-A Python library for genomic sequences that keeps genomic coordinates and mutation history attached to the bases.
+A small Python library for **variant-effect and splicing workflows** — the kind where keeping a genomic coordinate and the original reference attached to each base is most of the value.
 
-SeqMat stores a DNA sequence as a NumPy structured array — `(nt, ref, index, mut_type, valid)` in parallel columns rather than a byte string. Slicing, mutation, complement, and splicing preserve genomic coordinates and the reference state through every transform, and the mutation history is recorded as a side product. The library also includes a gene/transcript model loaded from a single SQLite file built from Ensembl annotations, and a position → gene lookup over a sidecar index.
+SeqMat is not a replacement for Biopython. Biopython is the right default for sequence I/O, alignments, raw byte operations, and most of bioinformatics. SeqMat fills a narrower slot: when you need to apply a variant at a genomic coordinate, splice introns out, re-translate, and ask *"what was here originally?"* — that bookkeeping lives in the data model instead of in your code.
+
+A DNA sequence is stored as a NumPy structured array — `(nt, ref, index, mut_type, valid)` in parallel columns rather than a byte string. Slicing, mutation, complement, and splicing preserve the `index` (genomic coordinates) and the `ref` (original bases) through every transform, and mutation history is recorded as a side product. The library also includes a gene/transcript model loaded from a single SQLite file built from Ensembl annotations, and a position → gene lookup over a sidecar NumPy index.
 
 ```python
 from seqmat import Gene, SeqMat
@@ -35,6 +37,25 @@ Worked examples:
 
 - [KRAS G12D — coordinate to protein](examples/kras_g12d_analysis.ipynb): chromosome coordinate → mature mRNA → protein, comparing wild type to the G12D mutant.
 - [SeqMat vs Biopython, side by side](examples/seqmat_vs_biopython.ipynb): the same tasks in both libraries, with timings, calling out where each one wins.
+
+---
+
+## When SeqMat fits — and when it doesn't
+
+Reach for SeqMat when:
+
+- You have a genomic coordinate and want the gene, transcript, mature mRNA, or protein-level effect of a variant at it.
+- You need to splice introns out of a pre-mRNA while keeping a coordinate map for everything that survives.
+- You want a mutation history attached to the sequence without writing your own side-car dict.
+- You're doing splicing or variant-effect analyses where "what was originally here?" comes up repeatedly.
+
+Reach for Biopython (or another tool) when:
+
+- You're reading or writing FASTA, GenBank, EMBL, alignments, BLAST output, NCBI fetch, etc. Biopython has decades of format coverage that SeqMat will not match.
+- You need maximum throughput on raw byte operations — reverse-complement on long chromosomes, mass translations, big alignment passes. SeqMat's structured-array overhead is real and `Bio.Seq` will win.
+- You're doing batch interval-set algebra over many feature tables — that's PyRanges' job.
+
+The two libraries compose. Many real pipelines load FASTA via Biopython, do byte-level work in `Bio.Seq`, and reach for SeqMat where coordinate tracking and mutation history would otherwise be hand-written. See [examples/seqmat_vs_biopython.ipynb](examples/seqmat_vs_biopython.ipynb) for a head-to-head.
 
 ---
 
@@ -101,9 +122,14 @@ seq.apply_mutations([(25398290, "G", "A")])     # G12D, a common KRAS variant
 
 ## Performance
 
+Two short statements first, then the numbers.
+
+1. **For the operations SeqMat is built around** (coordinate-aware gene lookup, splicing-with-coordinate-preservation, mutation-tracked sequence assembly), it's fast enough that performance won't be the bottleneck in your pipeline.
+2. **For raw byte operations** (reverse-complement, mass translation, simple string mutations without coordinate tracking), Biopython is faster, often substantially. Use it.
+
 Measured on an M-series Mac, hg38, one core, warm caches. Reproducible via the scripts in `benchmarks/`.
 
-### Headline numbers
+### Operations SeqMat is built for
 
 | Operation                                          | Time     |
 | -------------------------------------------------- | -------: |
@@ -113,11 +139,11 @@ Measured on an M-series Mac, hg38, one core, warm caches. Reproducible via the s
 | `Gene.from_file("KRAS")` (SQLite + unpickle)       | 24 ms    |
 | `Gene.from_position(chrm, pos)` end-to-end         | 24 ms    |
 
-### Position → gene
+### Position → gene, head-to-head
 
-Same 63,241 hg38 gene intervals, same 10,000 random point queries. Different libraries are designed for different access patterns, so we report two workloads. Reproduce with `python benchmarks/bench_position_lookup.py`.
+Same 63,241 hg38 gene intervals, same 10,000 random point queries. PyRanges is the natural comparison; both libraries are good at this, in different idioms. Reproduce with `python benchmarks/bench_position_lookup.py`.
 
-Per-query (one coordinate, one answer, in a loop — the `Gene.from_position` pattern):
+Per-query (one coordinate, one answer, in a loop — `Gene.from_position`'s pattern):
 
 | Implementation                          | Per query |
 | --------------------------------------- | --------: |
@@ -126,27 +152,26 @@ Per-query (one coordinate, one answer, in a loop — the `Gene.from_position` pa
 | pandas (`groupby` chrm + boolean mask)  | 79 µs     |
 | PyRanges constructed per call           | 2.0 ms    |
 
-Batched (the whole query set in one call — PyRanges' native idiom):
+Batched (all queries handed in at once — PyRanges' native idiom):
 
 | Implementation                | Per query |
 | ----------------------------- | --------: |
 | PyRanges `.join`              | 2.07 µs   |
 | SeqMat (serial loop)          | 2.59 µs   |
 
-PyRanges and SeqMat are in roughly the same range when each is used the way it was designed for. Constructing a `PyRanges` per call is the slow path and not the PyRanges authors' intent — included here only because it's a common mistake.
+Each library wins its native workload. Constructing a `PyRanges` per call is slow (and not what its authors intend) — listed only because it's a common mistake.
 
-### Sequence operations vs Biopython
+### Where Biopython is faster
 
-50 kb sequence, 1,000 SNPs / 10 introns; 1 Mb reverse-complement. Reproduce with `python benchmarks/bench_sequence_ops.py`.
+For completeness, here are the operations where SeqMat is the wrong choice. The gap is the cost of the structured-array data model, which carries `(nt, ref, index, mut_type, valid)` through every transform.
 
-| Workload                                       | Biopython / native              | SeqMat  |
-| ---------------------------------------------- | ------------------------------: | ------: |
-| 1,000 SNPs (no history)                        | `MutableSeq`: 0.21 ms           | —       |
-| 1,000 SNPs with full mutation history          | —                               | 0.5 ms  |
-| 10-intron splice (50 kb)                       | `str.join`: 0.002 ms            | 0.8 ms  |
-| Reverse-complement (1 Mb)                      | `Seq.reverse_complement`: 0.57 ms | 9.4 ms |
+| Workload                       | Biopython / native              | SeqMat  |
+| ------------------------------ | ------------------------------: | ------: |
+| 1,000 SNPs (no history needed) | `MutableSeq`: 0.21 ms           | 0.5 ms (with history) |
+| 10-intron splice (50 kb)       | `str.join`: 0.002 ms            | 0.8 ms (coordinate-preserving) |
+| Reverse-complement (1 Mb)      | `Seq.reverse_complement`: 0.57 ms | 9.4 ms |
 
-For raw byte-string throughput, `Bio.Seq` and `bytearray` are faster. SeqMat's structured array adds bookkeeping that those types don't carry — genomic coordinates that survive indels, the reference held alongside the current sequence, and a mutation history list. The trade-off makes sense when you need that bookkeeping anyway (the KRAS G12D walkthrough is a typical case) and doesn't when you don't.
+If your hot path is one of these and you don't need coordinates or history attached to the result, use `Bio.Seq` or `bytearray`. The two libraries compose fine.
 
 ### Implementation notes
 
