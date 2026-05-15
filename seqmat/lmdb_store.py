@@ -5,12 +5,15 @@ Gene.from_file() will try LMDB first and fall back to per-gene pickle files othe
 All behavior is unchanged when LMDB is not used.
 """
 
+import logging
 import pickle
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from .config import get_organism_config, get_default_organism, load_config
+from .config import get_default_organism, get_organism_config, load_config
+
+_log = logging.getLogger(__name__)
 
 try:
     import lmdb as _lmdb
@@ -136,12 +139,12 @@ def build_lmdb(
                 genes_written += 1
                 total_size += len(raw_bytes)
             except Exception as exc:
-                print(f"  Skipped {pkl_file.name}: {exc}")
+                _log.warning("Skipped %s: %s", pkl_file.name, exc)
                 skipped += 1
     env.close()
-    print(f"LMDB built at: {out}")
-    print(f"  Genes written: {genes_written:,}")
-    print(f"  Total size:    {total_size / (1024 * 1024):.1f} MB")
-    if skipped:
-        print(f"  Skipped:       {skipped}")
+    _log.info(
+        "LMDB built at %s — %s genes, %.1f MB%s",
+        out, f"{genes_written:,}", total_size / (1024 * 1024),
+        f", {skipped} skipped" if skipped else "",
+    )
     return str(out)

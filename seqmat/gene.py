@@ -1,12 +1,15 @@
 """Gene class for representing genomic genes with associated transcripts"""
-from typing import Any, Dict, List, Tuple, Optional, Iterator, Union
+import logging
 from collections import Counter
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-from .config import get_organism_config, get_default_organism
-from .utils import unload_pickle
-from .transcript import Transcript
+from ._io import unload_pickle
+from .config import get_default_organism, get_organism_config
 from .locator import PosArg, gene_names_at_position
+from .transcript import Transcript
+
+_log = logging.getLogger(__name__)
 
 
 class Gene:
@@ -60,9 +63,9 @@ class Gene:
             yield Transcript(annotations, organism=self.organism)
 
     def __getitem__(self, item: str) -> Optional[Transcript]:
-        """Get a transcript by ID."""
+        """Get a transcript by ID. Returns ``None`` if the ID isn't an annotated transcript."""
         if item not in self.transcripts:
-            print(f"{item} not an annotated transcript of this gene.")
+            _log.warning("%s is not an annotated transcript of %s", item, self.gene_name)
             return None
         return Transcript(self.transcripts[item], organism=self.organism)
 
@@ -115,7 +118,7 @@ class Gene:
         try:
             config = get_organism_config(organism)
         except ValueError:
-            print(f"Organism '{organism}' not configured. Run setup_genomics_data() first.")
+            _log.warning("Organism '%s' not configured. Run setup_genomics_data() first.", organism)
             return None
         mrna_path = Path(config["MRNA_PATH"])
         gene_files = []
@@ -124,7 +127,7 @@ class Gene:
                 if biotype_dir.is_dir():
                     gene_files.extend(biotype_dir.glob(f"*_{gene_name}.pkl"))
         if not gene_files:
-            print(f"No files available for gene '{gene_name}'.")
+            _log.warning("No files available for gene '%s' (organism=%s).", gene_name, organism)
             return None
         data = unload_pickle(gene_files[0])
         

@@ -379,10 +379,11 @@ class SeqMat:
                     conflicts.append((ia, ib))
         
         if conflicts:
+            import logging as _logging
             lines = ["Found conflicting mutations:"]
             for ia, ib in conflicts:
                 lines.append(f"  #{ia}: {muts[ia]}  <-->  #{ib}: {muts[ib]}")
-            print('\n'.join(lines))
+            _logging.getLogger(__name__).warning("\n".join(lines))
             return False
             
         return True

@@ -1,0 +1,18 @@
+{
+  "default_organism": "hg38",
+  "directory_structure": {
+    "chromosomes": "chromosomes",
+    "annotations": "annotations"
+  },
+  "gene_lmdb_path": null,
+  "gene_lmdb_local_staging": false,
+  "hg38": {
+    "BASE": "/storage/nicolaslynn/data/seqmat/hg38",
+    "CHROM_SOURCE": "/storage/nicolaslynn/data/seqmat/hg38/chromosomes",
+    "MRNA_PATH": "/storage/nicolaslynn/data/seqmat/hg38/annotations",
+    "MISSPLICING_PATH": "/storage/nicolaslynn/data/seqmat/hg38/missplicing",
+    "ONCOSPLICE_PATH": "/storage/nicolaslynn/data/seqmat/hg38/oncosplice",
+    "TEMP": "/storage/nicolaslynn/data/seqmat/hg38/temp",
+    "fasta_full_genome": "/storage/nicolaslynn/data/seqmat/hg38/hg38.fa"
+  }
+}

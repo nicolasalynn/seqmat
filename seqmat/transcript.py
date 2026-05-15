@@ -370,7 +370,10 @@ class Transcript:
             The ORF SeqMat if TIS/TTS are set, else self
         """
         if not self.protein_coding:
-            print("Cannot create protein without set TIS and TTS values.")
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Cannot create protein without set TIS and TTS values."
+            )
             return self
 
         # Extract ORF region from mature mRNA via clone (no string re-parse)
