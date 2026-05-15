@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import get_organism_config, get_default_organism
 from .utils import unload_pickle
 from .transcript import Transcript
+from .locator import PosArg, gene_names_at_position
 
 
 class Gene:
@@ -135,6 +136,33 @@ class Gene:
             transcripts=data.get('transcripts', {}),
             organism=organism
         )
+
+    @classmethod
+    def from_position(
+        cls,
+        chrm: str,
+        pos: PosArg,
+        organism: Optional[str] = None,
+    ) -> List['Gene']:
+        """Return all genes overlapping a point or range on a chromosome.
+
+        Args:
+            chrm: Chromosome (e.g. "12", "chr12", "X"). Leading 'chr' is stripped.
+            pos: Either an int position or a (start, end) tuple (inclusive).
+            organism: Organism build (uses default if None).
+
+        Returns:
+            List of Gene objects, possibly empty. Returned in ascending start order.
+        """
+        if organism is None:
+            organism = get_default_organism()
+        names = gene_names_at_position(chrm, pos, organism=organism)
+        genes: List['Gene'] = []
+        for name in names:
+            g = cls.from_file(name, organism=organism)
+            if g is not None:
+                genes.append(g)
+        return genes
 
     def splice_sites(self) -> Tuple[Counter, Counter]:
         """Return (Counter of acceptors, Counter of donors) across all transcripts."""

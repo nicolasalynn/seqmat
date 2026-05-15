@@ -5,7 +5,7 @@ A comprehensive Python library for genomic sequence analysis with full mutation 
 splicing analysis, and sequence manipulation.
 """
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 __author__ = "Nicolas Lynn Vila"
 __email__ = "nicolasalynn@gmail.com"
 
@@ -14,6 +14,7 @@ from .gene import Gene
 from .transcript import Transcript
 from .config import get_default_organism, get_data_dir, get_config_dir, get_config_file, get_data_base
 from .lmdb_store import build_lmdb
+from .locator import gene_names_at_position, build_location_index
 from .utils import (
     setup_genomics_data,
     set_fasta_path,
@@ -57,4 +58,6 @@ __all__ = [
     "get_all_genes",
     "available_genes",
     "build_lmdb",
+    "gene_names_at_position",
+    "build_location_index",
 ]

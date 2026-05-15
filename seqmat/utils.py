@@ -473,6 +473,15 @@ def retrieve_and_parse_ensembl_annotations(
     conn.close()
     print(f"Wrote {genes_db}")
 
+    # Sidecar position index for chrom/position -> gene lookups.
+    try:
+        from .locator import _LocationIndex
+        idx = _LocationIndex.build_from_db(genes_db)
+        idx.save(local_path / 'gene_locations.npz')
+        print(f"Wrote {local_path / 'gene_locations.npz'}")
+    except Exception as exc:
+        print(f"Warning: failed to build gene_locations.npz sidecar: {exc}")
+
 def split_fasta(input_file: Path, output_directory: Path, skip_existing: bool = False) -> None:
     """Split a FASTA file into individual chromosome files."""
     print("Splitting FASTA file by chromosome...")

@@ -36,9 +36,10 @@ def load_gene_from_sqlite(gene_name: str, organism: Optional[str] = None) -> Opt
         import sqlite3
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        key = gene_name.strip()
         cursor = conn.execute(
-            "SELECT data FROM genes WHERE UPPER(gene_name) = UPPER(?) LIMIT 1",
-            (gene_name.strip(),),
+            "SELECT data FROM genes WHERE UPPER(gene_name) = UPPER(?) OR gene_id = ? LIMIT 1",
+            (key, key),
         )
         row = cursor.fetchone()
         conn.close()
