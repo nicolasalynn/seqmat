@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seqmat"
-version = "1.5.0"
+version = "1.5.1"
 description = "Fast, vectorized genomic sequences with first-class mutation tracking."
 readme = "README.md"
 license = { file = "LICENSE" }

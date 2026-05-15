@@ -6,15 +6,41 @@ All notable changes to **SeqMat** are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-05-15
+
+### Fixed
+- Infinite loop in `SeqMat.apply_mutations` when a no-op SNP (`ref == alt`) was
+  in the batch. The left-normalization loop spun indefinitely once both operands
+  shrank to the `'-'` sentinel. The loop now bails cleanly and no-ops are dropped.
+  Regression test added.
+
+### Changed (performance)
+- Vectorize the single-base SNP path in `apply_mutations`. One `np.searchsorted`
+  across all positions, vectorized ref-check, single slice assignment for `nt`
+  and `mut_type`. 1,000 SNPs on a 45 kb sequence drop from ~120 ms to ~0.5 ms
+  while still recording the full mutation history.
+- `_validate_mutation_batch` was O(N²). Replaced with an O(N) hash check on the
+  pure-SNP fast path and an O(N log N) sweep-line on the general path.
+- `mutated_positions` is now updated incrementally inside the batch path; the
+  full O(seq length) refresh is skipped on SNP-only batches.
+- `reverse_complement` / `complement` use `bytes.translate` instead of NumPy
+  fancy indexing, and reverse the structured array column-by-column. ~2× faster
+  on a 1 Mb sequence.
+- `remove_regions` builds its survivor array directly instead of cloning and
+  applying a structured-mask copy. ~30% faster on a 50 kb / 10-intron splice.
+
 ### Added
 - `Gene.get(name)` — same lookup as `from_file` but raises typed exceptions
   (`GeneNotFoundError`, `OrganismNotConfiguredError`) instead of returning `None`.
   `Gene.from_file` is unchanged.
-- Comparative benchmark (`benchmarks/bench_position_lookup.py`) vs PyRanges,
-  pandas, and a handrolled `dict + bisect`. Numbers wired into the README.
+- Comparative benchmark scripts under `benchmarks/`: `bench_position_lookup.py`
+  vs PyRanges / pandas / handrolled `dict + bisect`, and `bench_sequence_ops.py`
+  vs Biopython / `bytearray` / `str`.
 - KRAS G12D end-to-end notebook (`examples/kras_g12d_analysis.ipynb`).
 - `pdoc`-rendered API reference auto-deployed to GitHub Pages on every push.
 - Repo logo, CI badge, Codecov badge.
+- Regression tests covering the no-op-SNP infinite-loop fix and the agreement
+  between the vectorized SNP batch path and the per-mutation path.
 
 ## [1.5.0] — 2026-05-15
 
@@ -110,7 +136,8 @@ Selected highlights from the pre-1.0 development history:
 - **0.1.47** — `cons_vector` fallback, optional flanking, clearer ref-mismatch message.
 - **0.1.45** — Pre-LMDB stable line; baseline for the production releases.
 
-[Unreleased]: https://github.com/nicolasalynn/seqmat/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/nicolasalynn/seqmat/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.5.1
 [1.5.0]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.5.0
 [1.4.0]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.4.0
 [1.3.1]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.3.1
