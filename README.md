@@ -31,7 +31,10 @@ seq.apply_mutations([(3, "C", "G"), (6, "-", "AAA"), (10, "TC", "-")])
 seq.mutations
 ```
 
-A worked example, end to end: [KRAS G12D — coordinate to protein](examples/kras_g12d_analysis.ipynb).
+Worked examples:
+
+- [KRAS G12D — coordinate to protein](examples/kras_g12d_analysis.ipynb): chromosome coordinate → mature mRNA → protein, comparing wild type to the G12D mutant.
+- [SeqMat vs Biopython, side by side](examples/seqmat_vs_biopython.ipynb): the same tasks in both libraries, with timings, calling out where each one wins.
 
 ---
 
