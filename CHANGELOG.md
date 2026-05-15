@@ -6,6 +6,29 @@ All notable changes to **SeqMat** are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-15
+
+### Added
+- Typed exception hierarchy in `seqmat.errors`: `SeqMatError` → `GeneNotFoundError`,
+  `OrganismNotConfiguredError`, `DataUnavailableError`
+  (`PrebuiltDataUnavailableError` kept as a backward-compatible alias).
+- `CHANGELOG.md`, GitHub Actions CI (pytest on 3.10/3.11/3.12 + sdist/wheel build).
+- `pyproject.toml` (PEP 621); `setup.py` removed.
+
+### Changed
+- `utils.py` (1,603 lines) split into focused modules: `_io.py`, `download.py`,
+  `gtf.py`, `conservation.py`, `data_setup.py`, `discovery.py`. `utils.py` remains
+  a re-export shim so every previous import path keeps working.
+- Library code now uses `logging.getLogger(__name__)` instead of bare `print()`.
+  CLI keeps user-facing prints. Callers control verbosity.
+
+### Fixed
+- `list_gene_biotypes`, `count_genes`, `get_gene_list`, `search_genes`,
+  `available_genes`, and `seqmat summary` previously scanned a legacy `*.pkl`
+  directory tree that doesn't exist on modern SQLite-backed installs and
+  silently returned empty results. They now query `genes.db` directly and
+  correctly report (e.g.) 42 biotypes / 120k genes across hg38 + mm39.
+
 ## [1.4.0] — 2026-05-15
 
 ### Added
@@ -77,7 +100,8 @@ Selected highlights from the pre-1.0 development history:
 - **0.1.47** — `cons_vector` fallback, optional flanking, clearer ref-mismatch message.
 - **0.1.45** — Pre-LMDB stable line; baseline for the production releases.
 
-[Unreleased]: https://github.com/nicolasalynn/seqmat/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/nicolasalynn/seqmat/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.5.0
 [1.4.0]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.4.0
 [1.3.1]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.3.1
 [1.3.0]: https://github.com/nicolasalynn/seqmat/releases/tag/v1.3.0

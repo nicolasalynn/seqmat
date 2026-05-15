@@ -1,6 +1,6 @@
 """SeqMat — fast, vectorized genomic sequences with first-class mutation tracking."""
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __author__ = "Nicolas Lynn Vila"
 __email__ = "nicolasalynn@gmail.com"
 
