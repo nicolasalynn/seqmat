@@ -6,6 +6,16 @@ All notable changes to **SeqMat** are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `Gene.get(name)` — same lookup as `from_file` but raises typed exceptions
+  (`GeneNotFoundError`, `OrganismNotConfiguredError`) instead of returning `None`.
+  `Gene.from_file` is unchanged.
+- Comparative benchmark (`benchmarks/bench_position_lookup.py`) vs PyRanges,
+  pandas, and a handrolled `dict + bisect`. Numbers wired into the README.
+- KRAS G12D end-to-end notebook (`examples/kras_g12d_analysis.ipynb`).
+- `pdoc`-rendered API reference auto-deployed to GitHub Pages on every push.
+- Repo logo, CI badge, Codecov badge.
+
 ## [1.5.0] — 2026-05-15
 
 ### Added
