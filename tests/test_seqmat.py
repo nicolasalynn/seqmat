@@ -26,6 +26,37 @@ class TestSeqMat:
         seq.apply_mutations((3, "C", "G"))
         assert seq.seq == "ATGGATCG"
         assert 3 in seq.mutated_positions
+
+    def test_noop_snp_does_not_hang(self):
+        """A SNP where ref == alt must finish quickly (and be a no-op).
+
+        Regression: a previous bug caused the left-normalization loop to spin
+        forever when both ref and alt shrank to the '-' sentinel.
+        """
+        import time
+        seq = SeqMat("ATCGATCG")
+        t0 = time.perf_counter()
+        seq.apply_mutations([(1, "A", "A"), (4, "G", "G")])
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 0.1, f"apply_mutations took {elapsed:.2f}s, suspect infinite loop"
+        assert seq.seq == "ATCGATCG"
+        assert seq.mutations == []
+
+    def test_batched_snps_match_per_mutation(self):
+        """The vectorized batch SNP path must agree with the per-mutation path."""
+        seq_str = "ATCG" * 500
+        # SeqMat is 1-indexed by default; refs picked to match the actual base.
+        # 1-based positions 2/10/100/500 → ATCG offsets 1/1/3/3 → 'T','T','G','G'.
+        muts = [(2, "T", "C"), (10, "T", "A"), (100, "G", "T"), (500, "G", "C")]
+        a = SeqMat(seq_str)
+        a.apply_mutations(muts)
+        b = SeqMat(seq_str)
+        for m in muts:
+            b.apply_mutations([m])
+        assert a.seq == b.seq
+        assert {(m["pos"], m["ref"], m["alt"]) for m in a.mutations} == {
+            (m["pos"], m["ref"], m["alt"]) for m in b.mutations
+        }
     
     def test_insertion_mutation(self):
         """Test insertion mutation"""

@@ -9,9 +9,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Downloads](https://static.pepy.tech/badge/seqmat/month)](https://pepy.tech/project/seqmat)
 
-**Fast, vectorized genomic sequences with first-class mutation tracking.**
+**Vectorized genomic sequences as a coordinate-tracked matrix, with first-class mutation history.**
 
-SeqMat treats a DNA sequence as a NumPy-backed matrix of (nucleotide, genomic position) — so slicing, mutation, complement, and splicing are all vectorized array operations. It ships with a compact gene/transcript model that loads from a single indexed SQLite file built from Ensembl annotations, plus a position → gene lookup that resolves overlapping genes in microseconds.
+SeqMat stores a DNA sequence as a NumPy structured array of `(nt, ref, index, mut_type, valid)` — five parallel columns rather than a byte string. That extra book-keeping is the whole point: slicing, mutation, complement, and splicing all preserve **genomic coordinates** and **mutation provenance** through every transform. You get the convenience of "what was originally at chr12:25,245,350 vs what's there now" for free; in `Bio.Seq` or `bytearray` you'd be maintaining offset tables and a side-car history dict yourself.
+
+It ships with a compact gene/transcript model that loads from a single indexed SQLite file built from Ensembl annotations, plus a position → gene lookup that resolves overlapping genes in microseconds.
 
 ```python
 from seqmat import Gene, SeqMat
@@ -98,17 +100,17 @@ seq.apply_mutations([(25398290, "G", "A")])     # G12D, the most famous KRAS var
 
 ## Performance
 
-### What SeqMat does in microseconds
+### Headline numbers
 
-Numbers from an M-series Mac on hg38 (one core, warm caches):
+M-series Mac on hg38, one core, warm caches:
 
-| Operation                                    | Time      |
-| -------------------------------------------- | --------: |
+| Operation                                    | Time       |
+| -------------------------------------------- | ---------: |
 | `gene_names_at_position(chrm, pos)`          | **2.5 µs** |
-| `Gene.from_file("KRAS")` (SQLite + unpickle) | 24 ms     |
-| `Gene.from_position(chrm, pos)` end-to-end   | 24 ms     |
-| KRAS mature mRNA assembly                    | 0.2 ms    |
-| 1,000-SNP batch on 4 kb sequence             | 19 ms    |
+| KRAS mature mRNA assembly (splice + translate) | 0.2 ms   |
+| 1,000-SNP batch on 45 kb sequence (with history) | 0.5 ms |
+| `Gene.from_file("KRAS")` (SQLite + unpickle) | 24 ms      |
+| `Gene.from_position(chrm, pos)` end-to-end   | 24 ms      |
 
 ### Position → gene, head-to-head
 
@@ -131,6 +133,19 @@ Same 63,241 hg38 gene intervals, same 10,000 random point queries, same machine.
 | SeqMat (serial loop)              | 2.59 µs    | 1.25× slower |
 
 > **The honest story:** SeqMat is built for the per-query pattern and wins it convincingly — 8× over a careful hand-rolled index, 31× over pandas. PyRanges is built for batch interval-set algebra and wins that workload, but only by ~25%. Don't construct a PyRanges per call (the "PyRanges anti-pattern" row); use SeqMat for single-coordinate annotation loops or batch your queries into PyRanges. Either is fine; doing neither is what hurts.
+
+### Sequence operations vs Biopython
+
+50 kb sequence, 1,000 SNPs / 10 introns / 1 Mb reverse-complement. Reproduce with `python benchmarks/bench_sequence_ops.py`.
+
+| Workload                                  | Biopython / native | SeqMat | Delta |
+| ----------------------------------------- | -----------------: | -----: | ----: |
+| 1,000 SNPs (no history)                   | 0.21 ms `MutableSeq` | — | — |
+| **1,000 SNPs (with full mutation history)** | — | **0.5 ms** | **2.5× of `MutableSeq`, while tracking every change** |
+| 10-intron splice (50 kb)                  | 0.002 ms `str.join` | 0.8 ms | 500× — Biopython has no coordinate-preserving splice |
+| Reverse-complement (1 Mb)                 | 0.57 ms `Seq.reverse_complement` | 9.4 ms | 16× — reverses the 27-byte structured record array |
+
+> **Pick the right tool:** If you just want raw byte-string throughput, `Bio.Seq` and `bytearray` will always beat a coordinate-tracked structured array. SeqMat earns the overhead when you need the *coordinates*, the *mutation history*, and the *reference vs current* state together. Workloads like the [KRAS G12D notebook](examples/kras_g12d_analysis.ipynb) — apply a few mutations at genomic coordinates, re-splice, re-translate, compare to WT — never see that overhead, because the bookkeeping is exactly what you'd have to write by hand otherwise.
 
 ### Why it's fast
 
