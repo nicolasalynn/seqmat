@@ -65,3 +65,8 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Local dev artifacts
+*.tmp.npz
+errors_failures.txt
+config.json

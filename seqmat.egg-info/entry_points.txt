@@ -1,3 +1,0 @@
-[console_scripts]
-seqmat = seqmat.cli:main
-seqmat-setup = seqmat.cli:main
