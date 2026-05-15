@@ -112,16 +112,25 @@ Numbers from an M-series Mac on hg38 (one core, warm caches):
 
 ### Position → gene, head-to-head
 
-Same 63,241 hg38 gene intervals, same 10,000 random point queries, same machine. Setup time (one-time index build) is reported separately from steady-state query time. Reproduce with `python benchmarks/bench_position_lookup.py`.
+Same 63,241 hg38 gene intervals, same 10,000 random point queries, same machine. **Two workloads** — different libraries are optimized for different patterns, so we report both. Reproduce with `python benchmarks/bench_position_lookup.py`.
 
-| Implementation               | Setup    | Per query  | Relative   |
-| ---------------------------- | -------: | ---------: | ---------: |
-| **SeqMat**                   | 14 ms    | **2.5 µs** | **1×**     |
-| Python `dict` + `bisect`     | 9 ms     | 20 µs      | 8× slower  |
-| pandas (boolean mask)        | 19 ms    | 1.2 ms     | 500× slower |
-| PyRanges 0.1.x (`PyRanges.join`) | 255 ms | 2.0 ms   | 830× slower |
+**Per-query (the `Gene.from_position` pattern: one coordinate, one answer, in a loop):**
 
-> *Fair-comparison note:* PyRanges is built for whole-interval-set algebra, not single-point queries — its high per-query cost reflects the overhead of constructing a query `PyRanges` per call, which is what you do at a real call site. For batched set operations on intervals, PyRanges is the right tool; for "what gene is at this coordinate?", SeqMat's purpose-built sidecar index wins by a wide margin.
+| Implementation                    | Per query  | Relative      |
+| --------------------------------- | ---------: | ------------: |
+| **SeqMat (locator)**              | **2.5 µs** | **1×**        |
+| Python `dict` + `bisect`          | 21 µs      | 8× slower    |
+| pandas (`groupby` chrm + mask)    | 79 µs      | 31× slower   |
+| PyRanges constructed per call     | 2.0 ms     | 800× slower *(anti-pattern)* |
+
+**Batched (hand the whole query set to the library at once, PyRanges' native idiom):**
+
+| Implementation                    | Per query  | Relative      |
+| --------------------------------- | ---------: | ------------: |
+| PyRanges `.join` (one call)       | 2.07 µs    | 1×            |
+| SeqMat (serial loop)              | 2.59 µs    | 1.25× slower |
+
+> **The honest story:** SeqMat is built for the per-query pattern and wins it convincingly — 8× over a careful hand-rolled index, 31× over pandas. PyRanges is built for batch interval-set algebra and wins that workload, but only by ~25%. Don't construct a PyRanges per call (the "PyRanges anti-pattern" row); use SeqMat for single-coordinate annotation loops or batch your queries into PyRanges. Either is fine; doing neither is what hurts.
 
 ### Why it's fast
 

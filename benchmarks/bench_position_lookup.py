@@ -1,23 +1,35 @@
-"""Compare chromosome+position → gene lookup against pyranges and pandas.
+"""Honest comparison of chromosome+position → gene lookup.
 
-Honest, apples-to-apples:
-- All implementations index the same ``(chrm, start, end, name)`` rows from ``genes.db``.
-- Setup time (one-time index build) is timed separately from steady-state queries.
-- Steady-state runs 10,000 random point queries drawn from the gene set so every
-  query hits a real interval.
-- Each timing is the *minimum* of 5 runs to suppress GC/JIT noise.
+Two workloads, two tables:
+
+1. **Per-query (serial loop)** — call ``query(chrm, pos)`` 10,000 times in a row,
+   exactly the way ``Gene.from_position`` is meant to be used. Reflects "I just
+   parsed one VCF line, what gene is here?"
+2. **Batched** — hand the implementation all 10,000 (chrm, pos) pairs at once,
+   measure the total. Reflects "I have a full VCF, annotate everything."
+
+Why both: PyRanges is built for batch interval-set algebra; calling it
+per-query is the wrong tool. SeqMat's locator is built for per-query
+lookups and doesn't have a vectorized batch API today. Each library wins
+its native workload — the table tells the truth.
+
+All implementations index the same ``(chrm, start, end, name)`` rows
+extracted from ``genes.db``. Setup time (one-time index build) is timed
+separately. Each timing is the minimum of N runs to suppress GC noise.
 
 Usage:
     python benchmarks/bench_position_lookup.py
-    python benchmarks/bench_position_lookup.py --organism hg38 --queries 10000 --runs 5
+    python benchmarks/bench_position_lookup.py --queries 10000 --runs 5
 """
 from __future__ import annotations
 
 import argparse
+import bisect
 import pickle
 import random
 import sqlite3
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Tuple
@@ -30,10 +42,6 @@ from seqmat.locator import _get_index
 from seqmat.sqlite_store import get_genes_db_path
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
-
 @dataclass
 class GeneRow:
     chrm: str
@@ -43,7 +51,6 @@ class GeneRow:
 
 
 def load_gene_rows(organism: str) -> List[GeneRow]:
-    """Extract (chrm, start, end, name) from genes.db."""
     db_path = get_genes_db_path(organism)
     if not db_path:
         raise RuntimeError(f"genes.db not found for organism {organism!r}")
@@ -63,94 +70,12 @@ def load_gene_rows(organism: str) -> List[GeneRow]:
 
 
 def sample_queries(rows: List[GeneRow], n: int, seed: int = 0) -> List[Tuple[str, int]]:
-    """Sample N random (chrm, pos) queries from real gene midpoints."""
     rng = random.Random(seed)
     sampled = [rng.choice(rows) for _ in range(n)]
     return [(r.chrm, (r.start + r.end) // 2) for r in sampled]
 
 
-# ---------------------------------------------------------------------------
-# Implementations
-# ---------------------------------------------------------------------------
-
-def build_seqmat(organism: str) -> Callable[[str, int], list]:
-    """Warm SeqMat's in-memory + sidecar index, return a query closure."""
-    _get_index(organism)  # warm
-    def query(chrm: str, pos: int) -> list:
-        return gene_names_at_position(chrm, pos, organism=organism)
-    return query
-
-
-def build_pyranges(rows: List[GeneRow]):
-    """Build a PyRanges from the same row set; return a query closure."""
-    import pandas as pd
-    import pyranges as pr
-
-    df = pd.DataFrame({
-        "Chromosome": [r.chrm for r in rows],
-        "Start":      [r.start for r in rows],
-        "End":        [r.end for r in rows],
-        "Name":       [r.name for r in rows],
-    })
-    gr = pr.PyRanges(df)
-
-    def query(chrm: str, pos: int) -> list:
-        # PyRanges expects "chr"-prefixed names if the index was built that way.
-        # Our rows are stored without prefix; mirror that on the query side.
-        q = pr.PyRanges(pd.DataFrame({"Chromosome": [chrm], "Start": [pos], "End": [pos + 1]}))
-        hit = gr.join(q)
-        return hit.Name.tolist() if len(hit) else []
-
-    return query
-
-
-def build_pandas(rows: List[GeneRow]):
-    """Naive pandas baseline: filter on chrm + boolean mask on the full DataFrame."""
-    import pandas as pd
-
-    df = pd.DataFrame({
-        "chrm":  [r.chrm for r in rows],
-        "start": [r.start for r in rows],
-        "end":   [r.end for r in rows],
-        "name":  [r.name for r in rows],
-    })
-
-    def query(chrm: str, pos: int) -> list:
-        hit = df[(df.chrm == chrm) & (df.start <= pos) & (df.end >= pos)]
-        return hit.name.tolist()
-
-    return query
-
-
-def build_dict_bisect(rows: List[GeneRow]):
-    """Per-chromosome sorted starts + bisect baseline — what someone might write by hand."""
-    import bisect
-    from collections import defaultdict
-
-    per_chrm = defaultdict(list)
-    for r in rows:
-        per_chrm[r.chrm].append((r.start, r.end, r.name))
-    for c in per_chrm:
-        per_chrm[c].sort(key=lambda t: t[0])
-    starts_by_chrm = {c: [t[0] for t in v] for c, v in per_chrm.items()}
-
-    def query(chrm: str, pos: int) -> list:
-        entries = per_chrm.get(chrm)
-        if not entries:
-            return []
-        starts = starts_by_chrm[chrm]
-        hi = bisect.bisect_right(starts, pos)
-        return [name for (s, e, name) in entries[:hi] if e >= pos]
-
-    return query
-
-
-# ---------------------------------------------------------------------------
-# Driver
-# ---------------------------------------------------------------------------
-
-def best_of(fn: Callable[[], None], runs: int) -> float:
-    """Return the minimum wall-clock seconds over ``runs`` invocations."""
+def best_of(fn: Callable[[], object], runs: int) -> float:
     best = float("inf")
     for _ in range(runs):
         t0 = time.perf_counter()
@@ -158,6 +83,112 @@ def best_of(fn: Callable[[], None], runs: int) -> float:
         best = min(best, time.perf_counter() - t0)
     return best
 
+
+# ---------------------------------------------------------------------------
+# Indexes
+# ---------------------------------------------------------------------------
+
+def build_seqmat_index(organism: str):
+    _get_index(organism)
+    return organism
+
+
+def build_pyranges_index(rows: List[GeneRow]):
+    import pandas as pd
+    import pyranges as pr
+    df = pd.DataFrame({
+        "Chromosome": [r.chrm for r in rows],
+        "Start":      [r.start for r in rows],
+        "End":        [r.end for r in rows],
+        "Name":       [r.name for r in rows],
+    })
+    return pr.PyRanges(df)
+
+
+def build_pandas_index(rows: List[GeneRow]):
+    import pandas as pd
+    df = pd.DataFrame({
+        "chrm":  [r.chrm for r in rows],
+        "start": np.array([r.start for r in rows], dtype=np.int64),
+        "end":   np.array([r.end for r in rows], dtype=np.int64),
+        "name":  [r.name for r in rows],
+    })
+    return {c: g for c, g in df.groupby("chrm")}
+
+
+def build_dict_bisect_index(rows: List[GeneRow]):
+    per_chrm = defaultdict(list)
+    for r in rows:
+        per_chrm[r.chrm].append((r.start, r.end, r.name))
+    for c in per_chrm:
+        per_chrm[c].sort(key=lambda t: t[0])
+    starts_by_chrm = {c: [t[0] for t in v] for c, v in per_chrm.items()}
+    return per_chrm, starts_by_chrm
+
+
+# ---------------------------------------------------------------------------
+# Per-query (serial loop) implementations
+# ---------------------------------------------------------------------------
+
+def serial_seqmat(organism, queries):
+    for chrm, pos in queries:
+        gene_names_at_position(chrm, pos, organism=organism)
+
+
+def serial_dict_bisect(idx, queries):
+    per_chrm, starts_by_chrm = idx
+    for chrm, pos in queries:
+        entries = per_chrm.get(chrm)
+        if not entries:
+            continue
+        starts = starts_by_chrm[chrm]
+        hi = bisect.bisect_right(starts, pos)
+        [name for (s, e, name) in entries[:hi] if e >= pos]
+
+
+def serial_pandas(by_chrm, queries):
+    for chrm, pos in queries:
+        g = by_chrm.get(chrm)
+        if g is None:
+            continue
+        g.loc[(g.start <= pos) & (g.end >= pos), "name"].tolist()
+
+
+def serial_pyranges(gr, queries):
+    """Anti-pattern: constructing a PyRanges per call. Included only as a warning."""
+    import pandas as pd
+    import pyranges as pr
+    for chrm, pos in queries:
+        q = pr.PyRanges(pd.DataFrame({"Chromosome": [chrm], "Start": [pos], "End": [pos + 1]}))
+        gr.join(q)
+
+
+# ---------------------------------------------------------------------------
+# Batched implementations
+# ---------------------------------------------------------------------------
+
+def batched_pyranges(gr, queries):
+    """Construct one PyRanges of all queries, do one .join(). The natural PyRanges idiom."""
+    import pandas as pd
+    import pyranges as pr
+    qdf = pd.DataFrame({
+        "Chromosome": [q[0] for q in queries],
+        "Start":      [q[1] for q in queries],
+        "End":        [q[1] + 1 for q in queries],
+    })
+    qpr = pr.PyRanges(qdf)
+    return gr.join(qpr)
+
+
+def batched_seqmat(organism, queries):
+    """SeqMat has no vectorized batch API today — this is the same serial loop."""
+    for chrm, pos in queries:
+        gene_names_at_position(chrm, pos, organism=organism)
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -174,66 +205,66 @@ def main() -> None:
     print(f"Sampling {args.queries:,} random point queries (seeded)...")
     queries = sample_queries(rows, args.queries)
 
-    implementations: List[Tuple[str, Callable]] = []
-
-    print("\nBuilding indexes (one-time setup cost):")
-
+    print("\nBuilding indexes:")
     t0 = time.perf_counter()
-    seqmat_q = build_seqmat(organism)
-    print(f"  SeqMat (cached sidecar):  {(time.perf_counter() - t0) * 1e3:.1f} ms")
-    implementations.append(("SeqMat", seqmat_q))
-
+    seqmat_idx = build_seqmat_index(organism)
+    print(f"  SeqMat (cached sidecar):    {(time.perf_counter() - t0) * 1e3:6.1f} ms")
     t0 = time.perf_counter()
-    pyranges_q = build_pyranges(rows)
-    print(f"  PyRanges (PyRanges):      {(time.perf_counter() - t0) * 1e3:.1f} ms")
-    implementations.append(("PyRanges 0.1.x", pyranges_q))
-
+    pyranges_idx = build_pyranges_index(rows)
+    print(f"  PyRanges:                   {(time.perf_counter() - t0) * 1e3:6.1f} ms")
     t0 = time.perf_counter()
-    pandas_q = build_pandas(rows)
-    print(f"  pandas DataFrame:         {(time.perf_counter() - t0) * 1e3:.1f} ms")
-    implementations.append(("pandas (boolean mask)", pandas_q))
-
+    pandas_idx = build_pandas_index(rows)
+    print(f"  pandas (groupby chrm):      {(time.perf_counter() - t0) * 1e3:6.1f} ms")
     t0 = time.perf_counter()
-    bisect_q = build_dict_bisect(rows)
-    print(f"  dict + bisect (handroll): {(time.perf_counter() - t0) * 1e3:.1f} ms")
-    implementations.append(("Python dict + bisect", bisect_q))
+    dict_idx = build_dict_bisect_index(rows)
+    print(f"  dict + bisect (handroll):   {(time.perf_counter() - t0) * 1e3:6.1f} ms")
 
-    print("\nSteady-state query benchmark (lower = better):")
-    print(f"{'Implementation':<28} {'Total (s)':>10}  {'Per query':>11}  {'Relative':>10}")
-    print("-" * 64)
+    def fmt_per_query(per_us: float) -> str:
+        return f"{per_us / 1000:6.2f} ms" if per_us > 1_000 else f"{per_us:6.2f} us"
 
-    # Warm each impl once (avoid cold-cache surprises)
-    for _, q in implementations:
-        for chrm, pos in queries[:50]:
-            q(chrm, pos)
+    def print_row(label, total, per_us, rel_baseline, n):
+        rel = f"{per_us / rel_baseline:>7.2f}x" if rel_baseline else "—"
+        print(f"  {label:<32} {total*1e3:>7.1f} ms total   {fmt_per_query(per_us):>11}/query   {rel:>10}    (n={n:,})")
 
-    seqmat_per = None
-    results = []
-    for label, q in implementations:
-        # PyRanges per-query is dramatically slower; cap its query count so the run finishes in seconds.
-        # We still report PER-QUERY latency, which is the apples-to-apples number.
-        if label.startswith("PyRanges"):
-            sample = queries[:max(50, args.queries // 100)]
-        else:
-            sample = queries
+    # --- Per-query table ----------------------------------------------------
+    print("\nPer-query (serial loop) — calling once per coordinate, the Gene.from_position pattern:")
+    # Warm all
+    for chrm, pos in queries[:50]:
+        gene_names_at_position(chrm, pos, organism=organism)
 
-        def run(qs=sample, fn=q):
-            for chrm, pos in qs:
-                fn(chrm, pos)
+    serial_results = []
 
-        total = best_of(run, runs=args.runs)
-        per_us = total / len(sample) * 1e6
-        results.append((label, total, per_us, len(sample)))
-        if label == "SeqMat":
-            seqmat_per = per_us
+    total = best_of(lambda: serial_seqmat(seqmat_idx, queries), args.runs)
+    seqmat_per = total / len(queries) * 1e6
+    serial_results.append(("SeqMat (locator)", total, seqmat_per, len(queries)))
 
-    for label, total, per_us, n in results:
-        rel = f"{per_us / seqmat_per:>7.1f}x" if seqmat_per else "—"
-        if per_us > 1_000:
-            per_str = f"{per_us / 1000:6.2f} ms"
-        else:
-            per_str = f"{per_us:6.2f} us"
-        print(f"{label:<28} {total:>10.3f}  {per_str:>11}  {rel:>10}    (n={n:,})")
+    total = best_of(lambda: serial_dict_bisect(dict_idx, queries), args.runs)
+    serial_results.append(("Python dict + bisect", total, total / len(queries) * 1e6, len(queries)))
+
+    total = best_of(lambda: serial_pandas(pandas_idx, queries), max(1, args.runs // 2))
+    serial_results.append(("pandas (groupby chrm)", total, total / len(queries) * 1e6, len(queries)))
+
+    # PyRanges anti-pattern: only run a small sample so the script finishes
+    sample = queries[:max(50, args.queries // 100)]
+    total = best_of(lambda: serial_pyranges(pyranges_idx, sample), 1)
+    serial_results.append(("PyRanges (constructed per call)", total, total / len(sample) * 1e6, len(sample)))
+
+    for label, total, per_us, n in serial_results:
+        print_row(label, total, per_us, seqmat_per, n)
+
+    # --- Batched table ------------------------------------------------------
+    print("\nBatched — all queries handed to the library at once (PyRanges' native idiom):")
+    batch_results = []
+
+    total = best_of(lambda: batched_pyranges(pyranges_idx, queries), args.runs)
+    pyranges_batch_per = total / len(queries) * 1e6
+    batch_results.append(("PyRanges (.join)", total, pyranges_batch_per, len(queries)))
+
+    total = best_of(lambda: batched_seqmat(seqmat_idx, queries), args.runs)
+    batch_results.append(("SeqMat (serial loop)", total, total / len(queries) * 1e6, len(queries)))
+
+    for label, total, per_us, n in batch_results:
+        print_row(label, total, per_us, pyranges_batch_per, n)
 
 
 if __name__ == "__main__":
