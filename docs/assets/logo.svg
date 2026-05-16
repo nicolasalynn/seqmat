@@ -1,24 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img" aria-label="SeqMat logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-label="SeqMat logo">
   <style>
-    .word { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-weight: 700; }
-    .tag { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; font-weight: 500; }
-    .word { fill: #1a1a1a; }
-    .tag { fill: #6a6a6a; }
+    .word { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-weight: 700; fill: #1a1a1a; }
     .tile-text { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-weight: 700; fill: #ffffff; }
     @media (prefers-color-scheme: dark) {
       .word { fill: #f5f5f5; }
-      .tag  { fill: #a0a0a0; }
     }
   </style>
 
   <!-- Wordmark -->
-  <text class="word" x="40" y="98" font-size="84" letter-spacing="-2">SeqMat</text>
-
-  <!-- Tagline -->
-  <text class="tag" x="44" y="128" font-size="20">sequences as matrices, mutations as math</text>
+  <text class="word" x="40" y="108" font-size="84" letter-spacing="-2">SeqMat</text>
 
   <!-- Sequence track underneath -->
-  <g transform="translate(40,150)">
+  <g transform="translate(40,140)">
     <!-- 12 tiles: A C G T A C G T A C G T -->
     <g>
       <rect x="0"   y="0" width="46" height="46" rx="6" fill="#44AF69"/>
