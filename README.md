@@ -227,6 +227,10 @@ Python ≥ 3.10. Core deps: `numpy`, `pandas`, `pyarrow`, `pysam`, `requests`, `
 
 `SeqMat` defaults to 1-based indices to match genomic conventions (UCSC, GenBank). If you'd rather work in 0-based offsets — e.g. for a comparison with `bytearray` or `Bio.Seq` — pass `indices=np.arange(len(seq))` at construction.
 
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) — what's coming, what isn't, and why. The headline themes: VCF + per-patient `Patient` / `Cohort` objects with lazy region-scoped variant application, reference-build-aware coordinate conversion, and splicing-impact integration.
+
 ## Contributing
 
 PRs welcome. Run the test suite with `pytest tests/`. Comparative benchmarks are under `benchmarks/`.
